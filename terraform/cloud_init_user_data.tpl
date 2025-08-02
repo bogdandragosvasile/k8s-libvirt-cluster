@@ -8,6 +8,8 @@ users:
     shell: /bin/bash
     lock_passwd: false
     passwd: "$6$rounds=4096$Vf8sfpKKh7vu3rTz$7e8rISQnXK0MXiHvZb2w5xn6L2/wAE6zayKpQthGIaFvLZiPIOhBQ.mEPRrtInvi6y2IkmiDyVjG.asPUP.eh0"
+    ssh_authorized_keys:
+      - ${public_key}
 ssh_pwauth: True
 disable_root: false
 chpasswd:

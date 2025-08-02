@@ -66,7 +66,10 @@ resource "libvirt_cloudinit_disk" "ci" {
 data "template_file" "user_data" {
   for_each = { for vm in local.vms: vm.name => vm }
   template = file("${path.module}/cloud_init_user_data.tpl")
-  vars = { hostname = each.key }
+  vars = {
+    hostname   = each.key
+    public_key = var.kube_ssh_public_key
+  }
 }
 
 data "template_file" "network_config" {

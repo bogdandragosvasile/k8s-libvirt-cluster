@@ -1,0 +1,69 @@
+name: Libvirt Kubernetes Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'What to do?'
+        required: true
+        default: 'create'
+        type: choice
+        options:
+          - create
+          - destroy
+
+jobs:
+  cluster:
+    runs-on: [self-hosted, linux]
+    defaults:
+      run:
+        working-directory: ./terraform
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure SSH keys exist for Ansible and provisioning
+        run: |
+          mkdir -p ~/.ssh
+          echo "$KUBE_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "$KUBE_SSH_PUBLIC_KEY" > ~/.ssh/id_ed25519.pub
+          chmod 644 ~/.ssh/id_ed25519.pub
+          ssh-keyscan -H 172.16.16.0/24 >> ~/.ssh/known_hosts || true
+        env:
+          KUBE_SSH_PRIVATE_KEY: ${{ secrets.KUBE_SSH_PRIVATE_KEY }}
+          KUBE_SSH_PUBLIC_KEY: ${{ secrets.KUBE_SSH_PUBLIC_KEY }}
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Apply (create)
+        if: ${{ github.event.inputs.action == 'create' }}
+        env:
+          TF_VAR_kube_ssh_public_key: ${{ secrets.KUBE_SSH_PUBLIC_KEY }}
+        run: terraform apply -auto-approve
+
+      - name: Terraform Destroy
+        if: ${{ github.event.inputs.action == 'destroy' }}
+        env:
+          TF_VAR_kube_ssh_public_key: ${{ secrets.KUBE_SSH_PUBLIC_KEY }}
+        run: terraform destroy -auto-approve
+
+      - name: Show Ansible Inventory
+        if: ${{ github.event.inputs.action == 'create' }}
+        run: cat ../ansible/inventory.ini
+
+      - name: Install Ansible (if needed)
+        if: ${{ github.event.inputs.action == 'create' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Run Ansible Playbook
+        if: ${{ github.event.inputs.action == 'create' }}
+        working-directory: ../ansible
+        env:
+          ANSIBLE_HOST_KEY_CHECKING: "False"
+        run: |
+          ansible-playbook -i inventory.ini main.yaml --extra-vars="@vars.yaml"
