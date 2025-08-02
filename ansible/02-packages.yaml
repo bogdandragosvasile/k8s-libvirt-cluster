@@ -1,0 +1,29 @@
+---
+- hosts: all
+  become: yes
+  tasks:
+    - name: update repo
+      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
+    - name: upgrade packages
+      apt: upgrade=dist force_apt_get=yes
+
+    - name: install necessary packages for all
+      apt:
+        name:
+          - apt-transport-https
+          - gpg
+          - curl
+          - ca-certificates
+        state: present
+        update_cache: true
+
+- hosts: load_balancer
+  become: yes
+  tasks:
+    - name: install HA packages
+      apt:
+        name:
+          - keepalived
+          - haproxy
+        state: present
+        update_cache: true

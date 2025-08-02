@@ -1,0 +1,18 @@
+[load_balancer]
+%{ for host in load_balancers ~}
+${host.name} ansible_host=${host.ip}
+%{ endfor ~}
+
+[control_plane]
+%{ for host in control_planes ~}
+${host.name} ansible_host=${host.ip}
+%{ endfor ~}
+
+[workers]
+%{ for host in workers ~}
+${host.name} ansible_host=${host.ip}
+%{ endfor ~}
+
+[all:vars]
+ansible_user=kubeadmin
+ansible_ssh_private_key_file=~/.ssh/id_ed25519

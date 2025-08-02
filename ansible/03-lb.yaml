@@ -1,0 +1,138 @@
+---
+- hosts: load_balancer
+  become: yes
+  tasks:
+    - name: check_apiserver
+      copy:
+        dest: "/etc/keepalived/check_apiserver.sh"
+        content: |
+          #!/bin/sh
+          
+          errorExit() {
+              echo "*** $*" 1>&2
+              exit 1
+          }
+          
+          curl --silent --max-time 2 --insecure https://localhost:{{ K8S_API_SERVER_PORT }}/ -o /dev/null || errorExit "Error GET https://localhost:{{ K8S_API_SERVER_PORT }}/"
+          if ip addr | grep -q {{ VIRTUAL_IP }}; then
+              curl --silent --max-time 2 --insecure https://{{ VIRTUAL_IP }}:{{ K8S_API_SERVER_PORT }}/ -o /dev/null || errorExit "Error GET https://{{ VIRTUAL_IP }}:{{ K8S_API_SERVER_PORT }}/"
+          fi
+
+    - name: make script executable
+      become: yes
+      shell: chmod +x /etc/keepalived/check_apiserver.sh
+
+    - name: haproxy
+      copy:
+        dest: "/etc/haproxy/haproxy.cfg"
+        content: |
+          global
+            maxconn 50000
+            log /dev/log local0
+            user haproxy
+            group haproxy
+           stats socket /var/lib/haproxy/stats
+          
+          defaults
+            log global
+            timeout connect 10s
+            timeout client 30s
+            timeout server 30s
+
+          frontend kubernetes-frontend
+            bind *:6443
+            mode tcp
+            option tcplog
+            default_backend kubernetes-backend
+          
+          backend kubernetes-backend
+            option httpchk GET /healthz
+            http-check expect status 200
+            mode tcp
+            option ssl-hello-chk
+            balance roundrobin
+              server kcontrolplane1 {{ IP_HOST_CP1 }}:6443 check
+              server kcontrolplane2 {{ IP_HOST_CP2 }}:6443 check
+              server kcontrolplane3 {{ IP_HOST_CP3 }}:6443 check
+
+- hosts: lb1
+  become: yes
+  tasks:
+    - name: keepalived
+      copy:
+        dest: "/etc/keepalived/keepalived.conf"
+        content: |
+          vrrp_script check_apiserver {
+            script "/etc/keepalived/check_apiserver.sh"
+            interval 3
+            timeout 10
+            fall 5
+            rise 2
+            weight -2
+          }
+          
+          vrrp_instance VI_1 {
+              state MASTER
+              interface eth1
+              virtual_router_id 1
+              priority 101
+              advert_int 5
+              authentication {
+                  auth_type PASS
+                  auth_pass {{ PASSWORD_KEEPALIVED }}
+              }
+              virtual_ipaddress {
+                  172.16.16.100
+              }
+              track_script {
+                  check_apiserver
+              }
+          }
+
+- hosts: lb2
+  become: yes
+  tasks:
+    - name: keepalived
+      copy:
+        dest: "/etc/keepalived/keepalived.conf"
+        content: |
+          vrrp_script check_apiserver {
+            script "/etc/keepalived/check_apiserver.sh"
+            interval 3
+            timeout 10
+            fall 5
+            rise 2
+            weight 2
+          }
+
+          vrrp_instance VI_1 {
+              state BACKUP
+              interface eth1
+              virtual_router_id 1
+              priority 100
+              advert_int 5
+              authentication {
+                  auth_type PASS
+                  auth_pass {{ PASSWORD_KEEPALIVED }}
+              }
+              virtual_ipaddress {
+                  172.16.16.100
+              }
+              track_script {
+                  check_apiserver
+              }
+          }
+
+
+- hosts: load_balancer
+  become: yes
+  tasks:
+    - name: keepalived services
+      ansible.builtin.systemd:
+        state: restarted
+        name: keepalived
+
+    - name: haproxy services
+      ansible.builtin.systemd:
+        state: restarted
+        name: haproxy
