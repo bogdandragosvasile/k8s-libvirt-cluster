@@ -29,7 +29,7 @@ resource "libvirt_network" "k8s_network" {
 resource "libvirt_volume" "debian-bookworm-base" {
   name   = "debian-bookworm-base.qcow2"
   pool   = "default"
-  source = "https://cloud.debian.org/images/cloud/bookworm/20231204-1573/debian-12-genericcloud-amd64.qcow2"
+  source = "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
   format = "qcow2"
 }
 
