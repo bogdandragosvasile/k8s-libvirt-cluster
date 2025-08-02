@@ -1,3 +1,20 @@
+terraform {
+  required_providers {
+    libvirt = {
+      source  = "dmacvicar/libvirt"
+      version = "~> 0.7"
+    }
+    local = {
+      source  = "hashicorp/local"
+      version = "~> 2.0"
+    }
+    template = {
+      source  = "hashicorp/template"
+      version = "~> 2.0"
+    }
+  }
+}
+
 provider "libvirt" {
   uri = "qemu:///system"
 }
@@ -23,9 +40,9 @@ locals {
     { name = "kcontrolplane1", role = "Control Plane", ip = "172.16.16.101", ram = 2048, vcpus = 2 },
     { name = "kcontrolplane2", role = "Control Plane", ip = "172.16.16.102", ram = 2048, vcpus = 2 },
     { name = "kcontrolplane3", role = "Control Plane", ip = "172.16.16.103", ram = 2048, vcpus = 2 },
-    { name = "kworker1",      role = "Worker",       ip = "172.16.16.201", ram = 2048, vcpus = 2 },
-    { name = "kworker2",      role = "Worker",       ip = "172.16.16.202", ram = 2048, vcpus = 2 },
-    { name = "kworker3",      role = "Worker",       ip = "172.16.16.203", ram = 2048, vcpus = 2 }
+    { name = "kworker1",      role = "Worker",         ip = "172.16.16.201", ram = 2048, vcpus = 2 },
+    { name = "kworker2",      role = "Worker",         ip = "172.16.16.202", ram = 2048, vcpus = 2 },
+    { name = "kworker3",      role = "Worker",         ip = "172.16.16.203", ram = 2048, vcpus = 2 }
   ]
 }
 
@@ -85,7 +102,7 @@ data "template_file" "network_config" {
 locals {
   load_balancers = [for vm in local.vms : { name = vm.name, ip = vm.ip } if vm.role == "Load Balancer"]
   control_planes = [for vm in local.vms : { name = vm.name, ip = vm.ip } if vm.role == "Control Plane"]
-  workers       = [for vm in local.vms : { name = vm.name, ip = vm.ip } if vm.role == "Worker"]
+  workers        = [for vm in local.vms : { name = vm.name, ip = vm.ip } if vm.role == "Worker"]
 }
 
 resource "local_file" "ansible_inventory" {
