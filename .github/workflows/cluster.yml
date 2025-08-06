@@ -44,6 +44,10 @@ jobs:
           TF_VAR_kube_ssh_public_key: ${{ secrets.KUBE_SSH_PUBLIC_KEY }}
         run: terraform apply -auto-approve
 
+      - name: Wait for VMs to Boot
+        if: ${{ github.event.inputs.action == 'create' }}
+        run: sleep 60  # Wait 1 minute for cloud-init and SSH to start
+
       - name: Terraform Destroy
         if: ${{ github.event.inputs.action == 'destroy' }}
         env:
@@ -59,6 +63,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ansible
+
+      - name: Remove known_hosts for test subnet
+        if: ${{ github.event.inputs.action == 'create' }}
+        run: ssh-keygen -R 172.16.16.0/24 || true
 
       - name: Run Ansible Playbook
         if: ${{ github.event.inputs.action == 'create' }}
