@@ -46,7 +46,7 @@ jobs:
 
       - name: Wait for VMs to Boot
         if: ${{ github.event.inputs.action == 'create' }}
-        run: sleep 60  # Wait 1 minute for cloud-init and SSH to start
+        run: sleep 120  # Wait 2 minutes for cloud-init and SSH to fully start
 
       - name: Terraform Destroy
         if: ${{ github.event.inputs.action == 'destroy' }}
