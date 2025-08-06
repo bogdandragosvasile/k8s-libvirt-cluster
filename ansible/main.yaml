@@ -1,5 +1,30 @@
 ---
 
+# New play to handle apt locks before any package tasks
+- hosts: all
+  become: yes
+  tasks:
+    - name: Wait for apt locks to be released
+      wait_for:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/apt/lists/lock
+        - /var/lib/dpkg/lock
+        - /var/lib/dpkg/lock-frontend
+        - /var/cache/apt/archives/lock
+      retries: 30  # Retry up to 30 times (5 minutes total)
+      delay: 10    # Wait 10 seconds between retries
+
+    - name: Kill any stuck apt processes (if wait fails)
+      command: fuser -k {{ item }}
+      loop:
+        - /var/lib/apt/lists/lock
+        - /var/lib/dpkg/lock
+        - /var/lib/dpkg/lock-frontend
+        - /var/cache/apt/archives/lock
+      ignore_errors: true  # Don't fail if no process is found
+
 - name: Initial setup
   import_playbook: 01-initial.yaml
 
@@ -20,14 +45,3 @@
 
 - name: Kubernetes config
   import_playbook: 07-k8s-config.yaml
-
-# Add this new play to wait for apt locks across all hosts
-- hosts: all
-  become: yes
-  tasks:
-    - name: Wait for automatic apt updates to complete
-      wait_for:
-        path: /var/lib/apt/lists/lock
-        state: absent
-      retries: 30  # Retry up to 30 times (5 minutes total)
-      delay: 10    # Wait 10 seconds between retries

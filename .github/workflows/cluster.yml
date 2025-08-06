@@ -44,9 +44,9 @@ jobs:
           TF_VAR_kube_ssh_public_key: ${{ secrets.KUBE_SSH_PUBLIC_KEY }}
         run: terraform apply -auto-approve
 
-      - name: Wait for VMs to Boot
+      - name: Wait for VMs to Boot and Initial Updates
         if: ${{ github.event.inputs.action == 'create' }}
-        run: sleep 180  # Wait 3 minutes for cloud-init and SSH to fully start
+        run: sleep 300  # Wait 5 minutes for cloud-init, SSH, and apt updates to complete
 
       - name: Terraform Destroy
         if: ${{ github.event.inputs.action == 'destroy' }}
