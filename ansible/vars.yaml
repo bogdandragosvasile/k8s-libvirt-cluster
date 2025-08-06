@@ -45,3 +45,6 @@ VERSION_CALICO: "v3.26.1"
 PASSWORD_KUBEADMIN: "kubeadmin"
 
 PASSWORD_KEEPALIVED: "fW/19P0JzwNqIveyXfnhLXswVBUSFF4d3oMyVSi3g/U="
+
+ansible_python_interpreter: /usr/bin/python3
+
