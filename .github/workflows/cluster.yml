@@ -52,7 +52,7 @@ jobs:
 
       - name: Show Ansible Inventory
         if: ${{ github.event.inputs.action == 'create' }}
-        run: cat ../ansible/inventory.ini
+        run: cat ${{ github.workspace }}/ansible/inventory.ini
 
       - name: Install Ansible (if needed)
         if: ${{ github.event.inputs.action == 'create' }}
@@ -62,7 +62,7 @@ jobs:
 
       - name: Run Ansible Playbook
         if: ${{ github.event.inputs.action == 'create' }}
-        working-directory: ../ansible
+        working-directory: ${{ github.workspace }}/ansible
         env:
           ANSIBLE_HOST_KEY_CHECKING: "False"
         run: |
