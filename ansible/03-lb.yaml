@@ -73,7 +73,7 @@
           
           vrrp_instance VI_1 {
               state MASTER
-              interface eth1
+              interface ens3
               virtual_router_id 1
               priority 101
               advert_int 5
@@ -107,7 +107,7 @@
 
           vrrp_instance VI_1 {
               state BACKUP
-              interface eth1
+              interface ens3
               virtual_router_id 1
               priority 100
               advert_int 5

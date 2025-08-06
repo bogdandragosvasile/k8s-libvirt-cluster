@@ -1,6 +1,6 @@
 version: 2
 ethernets:
-    eth0:
+    ens3:
         dhcp4: false
         addresses: [${ip}/24]
         gateway4: ${gateway}
