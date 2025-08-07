@@ -9,6 +9,8 @@ users:
     shell: /bin/bash
     ssh_authorized_keys:
       - ${public_key}
+    lock_passwd: false  # Enable password login
+    passwd: $6$l3sIKeAGXzaSeHlN$mIMt1w3.T236Stxf74thp.glTtb/.Vt8p0Yv/jZdzz6C4/blQ./KBiYiWy2rlJMFl0DD9NYMBE4Tee4cyPvs7.  # Replace with a hashed password
 
 apt:
   conf: |
@@ -18,5 +20,8 @@ apt:
 runcmd:
   - systemctl stop unattended-upgrades apt-daily.timer apt-daily-upgrade.timer || true
   - apt update -y
-  - apt install -y sudo openssh-server
+  - apt install -y sudo openssh-server net-tools ufw
   - echo "debian ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+  - ufw allow 22 || true
+  - systemctl enable --now ssh
+  - systemctl restart ssh
