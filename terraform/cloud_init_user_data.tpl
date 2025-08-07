@@ -1,20 +1,22 @@
 #cloud-config
-preserve_hostname: false
+
 hostname: ${hostname}
-manage_etc_hosts: true
+
 users:
   - name: debian
     sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: sudo, users
     shell: /bin/bash
-    lock_passwd: false
-    passwd: "$6$rounds=4096$Vf8sfpKKh7vu3rTz$7e8rISQnXK0MXiHvZb2w5xn6L2/wAE6zayKpQthGIaFvLZiPIOhBQ.mEPRrtInvi6y2IkmiDyVjG.asPUP.eh0"
     ssh_authorized_keys:
       - ${public_key}
-ssh_pwauth: True
-disable_root: false
-chpasswd:
-  list: |
-    debian:debian
-  expire: false
-package_update: true
-package_upgrade: true
+
+apt:
+  conf: |
+    APT::Periodic::Update-Package-Lists "0";
+    APT::Periodic::Unattended-Upgrade "0";
+
+runcmd:
+  - systemctl stop unattended-upgrades apt-daily.timer apt-daily-upgrade.timer || true
+  - apt update -y
+  - apt install -y sudo openssh-server
+  - echo "debian ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers

@@ -26,10 +26,10 @@ resource "libvirt_network" "k8s_network" {
   autostart = true
 }
 
-resource "libvirt_volume" "debian-bookworm-base" {
-  name   = "debian-bookworm-base.qcow2"
+resource "libvirt_volume" "debian-bookworm-nocloud-base" {
+  name   = "debian-bookworm-nocloud-base.qcow2"
   pool   = "default"
-  source = "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-amd64.qcow2"
+  source = "https://cloud.debian.org/images/cloud/bookworm/20250804-2194/debian-12-nocloud-amd64-20250804-2194.qcow2"
   format = "qcow2"
 }
 
@@ -50,7 +50,7 @@ resource "libvirt_volume" "vms" {
   for_each        = { for vm in local.vms: vm.name => vm }
   name            = "${each.key}.qcow2"
   pool            = "default"
-  base_volume_id  = libvirt_volume.debian-bookworm-base.id
+  base_volume_id  = libvirt_volume.debian-bookworm-nocloud-base.id
   format          = "qcow2"
 }
 
