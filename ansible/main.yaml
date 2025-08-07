@@ -1,47 +1,41 @@
----
-
-# New play to handle apt locks before any package tasks
 - hosts: all
   become: yes
   tasks:
-    - name: Wait for apt locks to be released
+    - name: Disable unattended-upgrades and apt-daily services
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      loop:
+        - unattended-upgrades
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+      ignore_errors: true  # Ignore if services don't exist
+
+    - name: Wait for apt locks to be released (with timeout)
       wait_for:
         path: "{{ item }}"
         state: absent
+        timeout: 600  # 10 minutes max wait
       loop:
         - /var/lib/apt/lists/lock
         - /var/lib/dpkg/lock
         - /var/lib/dpkg/lock-frontend
         - /var/cache/apt/archives/lock
-      retries: 30  # Retry up to 30 times (5 minutes total)
-      delay: 10    # Wait 10 seconds between retries
+      register: lock_wait
+      ignore_errors: true  # Allow continuation even if timeout occurs
 
-    - name: Kill any stuck apt processes (if wait fails)
-      command: fuser -k {{ item }}
+    - name: Forcefully kill stuck apt processes if wait timed out
+      command: |
+        fuser -k {{ item }} || true
+        rm -f {{ item }}
       loop:
         - /var/lib/apt/lists/lock
         - /var/lib/dpkg/lock
         - /var/lib/dpkg/lock-frontend
         - /var/cache/apt/archives/lock
-      ignore_errors: true  # Don't fail if no process is found
+      when: lock_wait.failed  # Only run if wait timed out
 
-- name: Initial setup
-  import_playbook: 01-initial.yaml
-
-- name: Install packages
-  import_playbook: 02-packages.yaml
-
-- name: Load balancer setup
-  import_playbook: 03-lb.yaml
-
-- name: Kubernetes setup
-  import_playbook: 04-k8s.yaml
-
-- name: Control plane setup
-  import_playbook: 05-control-plane.yaml
-
-- name: Worker setup
-  import_playbook: 06-worker.yaml
-
-- name: Kubernetes config
-  import_playbook: 07-k8s-config.yaml
+    - name: Ensure dpkg is consistent after cleanup
+      command: dpkg --configure -a
+      ignore_errors: true
