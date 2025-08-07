@@ -1,41 +1,64 @@
+---
+
+# New play to disable auto-updates and handle apt locks
 - hosts: all
   become: yes
   tasks:
-    - name: Disable unattended-upgrades and apt-daily services
+    - name: Disable unattended-upgrades to prevent lock conflicts
       systemd:
-        name: "{{ item }}"
+        name: unattended-upgrades
         state: stopped
         enabled: no
-      loop:
-        - unattended-upgrades
-        - apt-daily.timer
-        - apt-daily-upgrade.timer
-      ignore_errors: true  # Ignore if services don't exist
+      ignore_errors: true  # Ignore if not installed yet
 
-    - name: Wait for apt locks to be released (with timeout)
+    - name: Wait for apt locks to be released
       wait_for:
         path: "{{ item }}"
         state: absent
-        timeout: 600  # 10 minutes max wait
       loop:
         - /var/lib/apt/lists/lock
         - /var/lib/dpkg/lock
         - /var/lib/dpkg/lock-frontend
         - /var/cache/apt/archives/lock
-      register: lock_wait
-      ignore_errors: true  # Allow continuation even if timeout occurs
+      retries: 60  # Increased to 10 minutes total
+      delay: 10    # Wait 10 seconds between retries
 
-    - name: Forcefully kill stuck apt processes if wait timed out
-      command: |
-        fuser -k {{ item }} || true
-        rm -f {{ item }}
+    - name: Forcefully remove apt locks if wait times out
+      command: rm -f {{ item }}
       loop:
         - /var/lib/apt/lists/lock
         - /var/lib/dpkg/lock
         - /var/lib/dpkg/lock-frontend
         - /var/cache/apt/archives/lock
-      when: lock_wait.failed  # Only run if wait timed out
-
-    - name: Ensure dpkg is consistent after cleanup
-      command: dpkg --configure -a
+      when: ansible_failed_task is defined  # Only run if wait failed
       ignore_errors: true
+
+    - name: Kill any remaining stuck apt processes
+      command: fuser -k {{ item }}
+      loop:
+        - /var/lib/apt/lists/lock
+        - /var/lib/dpkg/lock
+        - /var/lib/dpkg/lock-frontend
+        - /var/cache/apt/archives/lock
+      ignore_errors: true
+
+- name: Initial setup
+  import_playbook: 01-initial.yaml
+
+- name: Install packages
+  import_playbook: 02-packages.yaml
+
+- name: Load balancer setup
+  import_playbook: 03-lb.yaml
+
+- name: Kubernetes setup
+  import_playbook: 04-k8s.yaml
+
+- name: Control plane setup
+  import_playbook: 05-control-plane.yaml
+
+- name: Worker setup
+  import_playbook: 06-worker.yaml
+
+- name: Kubernetes config
+  import_playbook: 07-k8s-config.yaml
