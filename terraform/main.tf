@@ -1,13 +1,13 @@
 # Complete main.tf for Kubernetes cluster on Libvirt with Ubuntu 24.04 base image
-# This provisions: 2 load balancers, 3 control planes, 3 workers
+# Provisions: 2 load balancers, 3 control planes, 3 workers
 # Assumes cloud_init_user_data.tpl and cloud_init_network_config.tpl are in the same directory
-# Adjust variables, IPs, memory/vcpu, etc., as needed for your setup
+# Assumes inventory.tpl for generating Ansible inventory.ini
 
 provider "libvirt" {
   uri = "qemu:///system"  # Connect to local Libvirt
 }
 
-# Variables
+# Variables (consolidated here, no duplicates)
 variable "kube_ssh_public_key" {
   description = "SSH public key for VMs"
   type        = string
@@ -121,7 +121,7 @@ resource "libvirt_volume" "cp" {
   name             = "${local.cp_vms[count.index].name}.qcow2"
   base_volume_id   = libvirt_volume.base.id
   pool             = "default"
-  size             = 21474836480  # 20 GB for control planes
+  size             = 21474836480  # 20 GB
 }
 
 data "template_file" "cp_user_data" {
@@ -196,7 +196,7 @@ resource "libvirt_volume" "worker" {
   name             = "${local.worker_vms[count.index].name}.qcow2"
   base_volume_id   = libvirt_volume.base.id
   pool             = "default"
-  size             = 32212254720  # 30 GB for workers
+  size             = 32212254720  # 30 GB
 }
 
 data "template_file" "worker_user_data" {
@@ -262,14 +262,14 @@ data "template_file" "inventory" {
   template = file("${path.module}/inventory.tpl")
 
   vars = {
-    lb1_ip        = libvirt_domain.lb[0].network_interface[0].addresses[0]
-    lb2_ip        = libvirt_domain.lb[1].network_interface[0].addresses[0]
-    cp1_ip        = libvirt_domain.cp[0].network_interface[0].addresses[0]
-    cp2_ip        = libvirt_domain.cp[1].network_interface[0].addresses[0]
-    cp3_ip        = libvirt_domain.cp[2].network_interface[0].addresses[0]
-    worker1_ip    = libvirt_domain.worker[0].network_interface[0].addresses[0]
-    worker2_ip    = libvirt_domain.worker[1].network_interface[0].addresses[0]
-    worker3_ip    = libvirt_domain.worker[2].network_interface[0].addresses[0]
+    lb1_ip      = libvirt_domain.lb[0].network_interface[0].addresses[0]
+    lb2_ip      = libvirt_domain.lb[1].network_interface[0].addresses[0]
+    cp1_ip      = libvirt_domain.cp[0].network_interface[0].addresses[0]
+    cp2_ip      = libvirt_domain.cp[1].network_interface[0].addresses[0]
+    cp3_ip      = libvirt_domain.cp[2].network_interface[0].addresses[0]
+    worker1_ip  = libvirt_domain.worker[0].network_interface[0].addresses[0]
+    worker2_ip  = libvirt_domain.worker[1].network_interface[0].addresses[0]
+    worker3_ip  = libvirt_domain.worker[2].network_interface[0].addresses[0]
   }
 }
 
@@ -278,22 +278,22 @@ resource "local_file" "inventory" {
   filename = "${path.module}/../ansible/inventory.ini"
 }
 
-# Outputs
+# Outputs (consolidated here, no duplicates)
 output "vm_ips" {
   value = {
-    loadbalancer1 = libvirt_domain.lb[0].network_interface[0].addresses[0]
-    loadbalancer2 = libvirt_domain.lb[1].network_interface[0].addresses[0]
+    loadbalancer1  = libvirt_domain.lb[0].network_interface[0].addresses[0]
+    loadbalancer2  = libvirt_domain.lb[1].network_interface[0].addresses[0]
     kcontrolplane1 = libvirt_domain.cp[0].network_interface[0].addresses[0]
     kcontrolplane2 = libvirt_domain.cp[1].network_interface[0].addresses[0]
     kcontrolplane3 = libvirt_domain.cp[2].network_interface[0].addresses[0]
-    kworker1 = libvirt_domain.worker[0].network_interface[0].addresses[0]
-    kworker2 = libvirt_domain.worker[1].network_interface[0].addresses[0]
-    kworker3 = libvirt_domain.worker[2].network_interface[0].addresses[0]
+    kworker1       = libvirt_domain.worker[0].network_interface[0].addresses[0]
+    kworker2       = libvirt_domain.worker[1].network_interface[0].addresses[0]
+    kworker3       = libvirt_domain.worker[2].network_interface[0].addresses[0]
   }
   description = "IPs of all provisioned VMs"
 }
 
 output "ansible_inventory_path" {
-  value = local_file.inventory.filename
+  value       = local_file.inventory.filename
   description = "Path to generated Ansible inventory file"
 }
