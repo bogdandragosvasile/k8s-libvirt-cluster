@@ -130,14 +130,8 @@ pipeline {
             steps {
                 dir('ansible') {
                     sh '''
-                    echo "Running Ansible with inventory: ${ANSIBLE_INVENTORY}"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} 01-initial.yaml --extra-vars "@vars.yaml"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} 02-packages.yaml --extra-vars "@vars.yaml"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} 03-lb.yaml --extra-vars "@vars.yaml"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} 04-k8s.yaml --extra-vars "@vars.yaml"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} 05-control-plane.yaml --extra-vars "@vars.yaml"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} 06-worker.yaml --extra-vars "@vars.yaml"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} 07-k8s-config.yaml --extra-vars "@vars.yaml"
+                    echo "Running main Ansible playbook with inventory: ${ANSIBLE_INVENTORY}"
+                    ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml"
                     '''
                 }
             }
