@@ -1,31 +1,25 @@
 ---
-
 - hosts: all
-
   become: yes
-
   tasks:
-    - name: create a user
+    - name: Create kubeadmin user
       user:
         name: kubeadmin
-        append: yes
         state: present
         groups: sudo
         createhome: yes
         shell: /bin/bash
         password: "{{ PASSWORD_KUBEADMIN | password_hash('sha512') }}"
 
-    - name: set up authorized keys for the user
+    - name: Set up authorized keys for kubeadmin user
       authorized_key:
         user: kubeadmin
         key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
 
 - hosts: control_plane
-
   become: yes
-
   tasks:
-    - name: Add kubectl alias for user
+    - name: Add kubectl alias for kubeadmin
       lineinfile:
         path: /home/kubeadmin/.bashrc
         line: "alias k='kubectl'"
@@ -35,7 +29,8 @@
         insertafter: EOF
         create: true
 
-    - name: Source .bashrc
+    - name: Source .bashrc for kubeadmin
       shell: "source /home/kubeadmin/.bashrc"
       args:
         executable: /bin/bash
+      become_user: kubeadmin

@@ -1,5 +1,4 @@
 ---
-
 # Simplified play to handle apt locks (with timeout and debug)
 - hosts: all
   become: yes

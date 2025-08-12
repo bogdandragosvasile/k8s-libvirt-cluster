@@ -10,7 +10,7 @@ users:
     ssh_authorized_keys:
       - ${public_key}
     lock_passwd: false  # Enable password login
-    passwd: $6$l3sIKeAGXzaSeHlN$mIMt1w3.T236Stxf74thp.glTtb/.Vt8p0Yv/jZdzz6C4/blQ./KBiYiWy2rlJMFl0DD9NYMBE4Tee4cyPvs7.  # Replace with a hashed password
+    passwd: $6$l3sIKeAGXzaSeHlN$mIMt1w3.T236Stxf74thp.glTtb/.Vt8p0Yv/jZdzz6C4/blQ./KBiYiWy2rlJMFl0DD9NYMBE4Tee4cyPvs7.  # Your hashed password
 
 apt:
   conf: |
@@ -25,3 +25,6 @@ runcmd:
   - ufw allow 22 || true
   - systemctl enable --now ssh
   - systemctl restart ssh
+  - ip link set dev lo up  # Ensure loopback is up
+  - sleep 10  # Brief wait for network to stabilize
+  - systemctl restart ssh  # Restart again after network
