@@ -112,13 +112,13 @@ pipeline {
         stage('Wait for VMs to be Reachable') {
             steps {
                 sh '''
-                MAX_RETRIES=60  # Increased to 10 minutes for cloud-init delays
+                MAX_RETRIES=60  # Increased to 10 minutes
                 SLEEP_TIME=10
                 cd terraform  # Change to terraform dir for outputs.json
                 for host in $(jq -r '.vm_ips.value[]' outputs.json); do
                     echo "Checking reachability for $host..."
                     for i in $(seq 1 $MAX_RETRIES); do
-                        if nc -zv $host 22; then
+                        if timeout 5 nc -zv $host 22; then
                             echo "$host is reachable on port 22."
                             break
                         fi
@@ -139,7 +139,7 @@ pipeline {
                 dir('ansible') {
                     sh '''
                     echo "Running main Ansible playbook with inventory: ${ANSIBLE_INVENTORY}"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" -vvv  # Verbose for debugging
+                    ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" --become -vvv  # Added --become for sudo, verbose debugging
                     '''
                 }
             }
