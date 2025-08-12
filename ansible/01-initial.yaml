@@ -19,18 +19,18 @@
 - hosts: control_plane
   become: yes
   tasks:
-    - name: Add kubectl alias for kubeadmin
+    - name: Add kubectl alias for ubuntu
       lineinfile:
-        path: /home/kubeadmin/.bashrc
+        path: /home/ubuntu/.bashrc
         line: "alias k='kubectl'"
-        owner: kubeadmin
+        owner: ubuntu
         regexp: "^alias k='kubectl'$"
         state: present
         insertafter: EOF
         create: true
 
-    - name: Source .bashrc for kubeadmin
-      shell: "source /home/kubeadmin/.bashrc"
+    - name: Source .bashrc for ubuntu
+      shell: "source /home/ubuntu/.bashrc"
       args:
         executable: /bin/bash
-      become_user: kubeadmin
+      become_user: ubuntu

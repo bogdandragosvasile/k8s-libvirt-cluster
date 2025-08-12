@@ -8,19 +8,19 @@
 
     - debug: msg="{{ cluster_initialized.stdout }}"
 
-    - name: Create .kube directory for debian user
+    - name: Create .kube directory for ubuntu user
       file:
-        path: /home/debian/.kube
+        path: /home/ubuntu/.kube
         state: directory
         mode: 0755
-        owner: debian
+        owner: ubuntu
 
-    - name: Copy admin.conf to debian user's kube config
+    - name: Copy admin.conf to ubuntu user's kube config
       copy:
         src: /etc/kubernetes/admin.conf
-        dest: /home/debian/.kube/config
+        dest: /home/ubuntu/.kube/config
         remote_src: yes
-        owner: debian
+        owner: ubuntu
         mode: 0600
 
     - name: Get join command
@@ -55,17 +55,17 @@
 - hosts: control_plane
   become: yes
   tasks:
-    - name: Create .kube directory for debian user
+    - name: Create .kube directory for ubuntu user
       file:
-        path: /home/debian/.kube
+        path: /home/ubuntu/.kube
         state: directory
         mode: 0755
-        owner: debian
+        owner: ubuntu
 
-    - name: Copy admin.conf to debian user's kube config
+    - name: Copy admin.conf to ubuntu user's kube config
       copy:
         src: /etc/kubernetes/admin.conf
-        dest: /home/debian/.kube/config
+        dest: /home/ubuntu/.kube/config
         remote_src: yes
-        owner: debian
+        owner: ubuntu
         mode: 0600

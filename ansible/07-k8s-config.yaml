@@ -7,6 +7,6 @@
       copy:
         src: /etc/kubernetes/admin.conf
         dest: ~/.kube/config
-        owner: debian
+        owner: ubuntu
         mode: 0600
         remote_src: yes

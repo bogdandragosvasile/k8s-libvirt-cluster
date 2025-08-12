@@ -1,6 +1,6 @@
 version: 2
 ethernets:
-  all-en:
+  primary-nic:
     match:
       name: en*
     dhcp4: false

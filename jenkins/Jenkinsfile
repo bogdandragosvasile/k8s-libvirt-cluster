@@ -19,10 +19,10 @@ pipeline {
                 timeout(time: 5, unit: 'MINUTES') {  // Prevent infinite download hangs
                     sh '''
                     echo "Starting base image preparation..."
-                    BASE_IMAGE_PATH="/var/lib/libvirt/images/debian-bookworm-nocloud-base.qcow2"
-                    BASE_IMAGE_URL="https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-nocloud-amd64.qcow2"
+                    BASE_IMAGE_PATH="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
+                    BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
                     if [ ! -f "$BASE_IMAGE_PATH" ]; then
-                        echo "Downloading base image (401 MB) - this may take a minute..."
+                        echo "Downloading base image (~500 MB) - this may take a minute..."
                         wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE_PATH" --progress=dot:giga  # Show progress
                     else
                         echo "Base image already exists - skipping download."
@@ -112,13 +112,13 @@ pipeline {
         stage('Wait for VMs to be Reachable') {
             steps {
                 sh '''
-                MAX_RETRIES=60  # Increased to 10 minutes
+                MAX_RETRIES=90  # 15 minutes for boot/SSH startup
                 SLEEP_TIME=10
                 cd terraform  # Change to terraform dir for outputs.json
                 for host in $(jq -r '.vm_ips.value[]' outputs.json); do
                     echo "Checking reachability for $host..."
                     for i in $(seq 1 $MAX_RETRIES); do
-                        if timeout 5 nc -zv $host 22; then
+                        if ping -c 1 $host > /dev/null 2>&1 && nc -zv $host 22; then
                             echo "$host is reachable on port 22."
                             break
                         fi
@@ -139,7 +139,7 @@ pipeline {
                 dir('ansible') {
                     sh '''
                     echo "Running main Ansible playbook with inventory: ${ANSIBLE_INVENTORY}"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" --become -vvv  # Added --become for sudo, verbose debugging
+                    ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" -vvv  # Verbose for debugging
                     '''
                 }
             }
