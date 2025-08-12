@@ -1,13 +1,21 @@
 # Complete main.tf for Kubernetes cluster on Libvirt with Ubuntu 24.04 base image
 # Provisions: 2 load balancers, 3 control planes, 3 workers
-# Assumes cloud_init_user_data.tpl and cloud_init_network_config.tpl are in the same directory
-# Assumes inventory.tpl for generating Ansible inventory.ini
+# Assumes cloud_init_user_data.tpl, cloud_init_network_config.tpl, and inventory.tpl are in the same directory
+
+terraform {
+  required_providers {
+    libvirt = {
+      source  = "dmacvicar/libvirt"  # Correct community provider source
+      version = "~> 0.8.3"           # Pin to a stable version
+    }
+  }
+}
 
 provider "libvirt" {
   uri = "qemu:///system"  # Connect to local Libvirt
 }
 
-# Variables (consolidated here, no duplicates)
+# Variables (consolidated here)
 variable "kube_ssh_public_key" {
   description = "SSH public key for VMs"
   type        = string
@@ -278,7 +286,7 @@ resource "local_file" "inventory" {
   filename = "${path.module}/../ansible/inventory.ini"
 }
 
-# Outputs (consolidated here, no duplicates)
+# Outputs (consolidated here)
 output "vm_ips" {
   value = {
     loadbalancer1  = libvirt_domain.lb[0].network_interface[0].addresses[0]
