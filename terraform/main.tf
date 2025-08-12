@@ -267,7 +267,7 @@ resource "libvirt_domain" "worker" {
 
 # Generate Ansible inventory.ini
 data "template_file" "inventory" {
-  template = file("${path.module}/inventory.tpl")
+  template = file("${path.module}/inventory.tpl")  # Ensure this path matches your file location
 
   vars = {
     lb1_ip      = libvirt_domain.lb[0].network_interface[0].addresses[0]
