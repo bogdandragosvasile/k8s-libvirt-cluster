@@ -100,6 +100,7 @@ resource "libvirt_domain" "lb" {
 
   network_interface {
     network_name = "default"
+    wait_for_lease = true  # Wait for IP lease
   }
 
   console {
@@ -175,6 +176,7 @@ resource "libvirt_domain" "cp" {
 
   network_interface {
     network_name = "default"
+    wait_for_lease = true  # Wait for IP lease
   }
 
   console {
@@ -250,6 +252,7 @@ resource "libvirt_domain" "worker" {
 
   network_interface {
     network_name = "default"
+    wait_for_lease = true  # Wait for IP lease
   }
 
   console {
@@ -267,17 +270,17 @@ resource "libvirt_domain" "worker" {
 
 # Generate Ansible inventory.ini
 data "template_file" "inventory" {
-  template = file("${path.module}/inventory.tpl")  # Ensure this path matches your file location
+  template = file("${path.module}/inventory.tpl")
 
   vars = {
-    lb1_ip      = libvirt_domain.lb[0].network_interface[0].addresses[0]
-    lb2_ip      = libvirt_domain.lb[1].network_interface[0].addresses[0]
-    cp1_ip      = libvirt_domain.cp[0].network_interface[0].addresses[0]
-    cp2_ip      = libvirt_domain.cp[1].network_interface[0].addresses[0]
-    cp3_ip      = libvirt_domain.cp[2].network_interface[0].addresses[0]
-    worker1_ip  = libvirt_domain.worker[0].network_interface[0].addresses[0]
-    worker2_ip  = libvirt_domain.worker[1].network_interface[0].addresses[0]
-    worker3_ip  = libvirt_domain.worker[2].network_interface[0].addresses[0]
+    lb1_ip      = try(libvirt_domain.lb[0].network_interface[0].addresses[0], local.lb_vms[0].ip)
+    lb2_ip      = try(libvirt_domain.lb[1].network_interface[0].addresses[0], local.lb_vms[1].ip)
+    cp1_ip      = try(libvirt_domain.cp[0].network_interface[0].addresses[0], local.cp_vms[0].ip)
+    cp2_ip      = try(libvirt_domain.cp[1].network_interface[0].addresses[0], local.cp_vms[1].ip)
+    cp3_ip      = try(libvirt_domain.cp[2].network_interface[0].addresses[0], local.cp_vms[2].ip)
+    worker1_ip  = try(libvirt_domain.worker[0].network_interface[0].addresses[0], local.worker_vms[0].ip)
+    worker2_ip  = try(libvirt_domain.worker[1].network_interface[0].addresses[0], local.worker_vms[1].ip)
+    worker3_ip  = try(libvirt_domain.worker[2].network_interface[0].addresses[0], local.worker_vms[2].ip)
   }
 }
 
@@ -289,14 +292,14 @@ resource "local_file" "inventory" {
 # Outputs (consolidated here)
 output "vm_ips" {
   value = {
-    loadbalancer1  = libvirt_domain.lb[0].network_interface[0].addresses[0]
-    loadbalancer2  = libvirt_domain.lb[1].network_interface[0].addresses[0]
-    kcontrolplane1 = libvirt_domain.cp[0].network_interface[0].addresses[0]
-    kcontrolplane2 = libvirt_domain.cp[1].network_interface[0].addresses[0]
-    kcontrolplane3 = libvirt_domain.cp[2].network_interface[0].addresses[0]
-    kworker1       = libvirt_domain.worker[0].network_interface[0].addresses[0]
-    kworker2       = libvirt_domain.worker[1].network_interface[0].addresses[0]
-    kworker3       = libvirt_domain.worker[2].network_interface[0].addresses[0]
+    loadbalancer1  = try(libvirt_domain.lb[0].network_interface[0].addresses[0], local.lb_vms[0].ip)
+    loadbalancer2  = try(libvirt_domain.lb[1].network_interface[0].addresses[0], local.lb_vms[1].ip)
+    kcontrolplane1 = try(libvirt_domain.cp[0].network_interface[0].addresses[0], local.cp_vms[0].ip)
+    kcontrolplane2 = try(libvirt_domain.cp[1].network_interface[0].addresses[0], local.cp_vms[1].ip)
+    kcontrolplane3 = try(libvirt_domain.cp[2].network_interface[0].addresses[0], local.cp_vms[2].ip)
+    kworker1       = try(libvirt_domain.worker[0].network_interface[0].addresses[0], local.worker_vms[0].ip)
+    kworker2       = try(libvirt_domain.worker[1].network_interface[0].addresses[0], local.worker_vms[1].ip)
+    kworker3       = try(libvirt_domain.worker[2].network_interface[0].addresses[0], local.worker_vms[2].ip)
   }
   description = "IPs of all provisioned VMs"
 }
