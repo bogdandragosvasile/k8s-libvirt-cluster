@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y \
     qemu-kvm \
     virtinst \
     genisoimage \
+    jq \
     netcat-openbsd  # Added for nc in wait stage (port checking)
 
 # Add HashiCorp repo for Terraform
