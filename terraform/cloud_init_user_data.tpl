@@ -20,16 +20,17 @@ apt:
     APT::Periodic::Unattended-Upgrade "0";
 
 packages:
-  - openssh-server  # Use packages module for reliable installation
   - sudo
   - net-tools
   - ufw
 
 runcmd:
   - systemctl stop unattended-upgrades apt-daily.timer apt-daily-upgrade.timer || true
-  - sleep 30  # Delay for network to stabilize before further commands
-  - apt update -y  # Explicit update after delay
+  - sleep 30  # Delay for network to stabilize
+  - sudo apt update -y  # Explicitly update package lists before manual installs
+  - sudo apt install -y openssh-server  # Install SSH server after update
   - echo "debian ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
   - ufw allow 22 || true
   - systemctl enable --now ssh
   - systemctl restart ssh
+
