@@ -14,12 +14,12 @@ RUN apt-get update && apt-get install -y \
     wget \
     ansible \
     git \
-    jq \
     openssh-client \
     libvirt-clients \
     qemu-kvm \
     virtinst \
-    genisoimage
+    genisoimage \
+    netcat-openbsd  # Added for nc in wait stage (port checking)
 
 # Add HashiCorp repo for Terraform
 RUN curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg && \
