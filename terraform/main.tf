@@ -47,17 +47,6 @@ locals {
     { name = "loadbalancer1", ip = "172.16.16.51", memory = 1024, vcpu = 1 },
     { name = "loadbalancer2", ip = "172.16.16.52", memory = 1024, vcpu = 1 }
   ]
-  cp_vms = [
-    { name = "kcontrolplane1", ip = "172.16.16.101", memory = 4096, vcpu = 2 },
-    { name = "kcontrolplane2", ip = "172.16.16.102", memory = 4096, vcpu = 2 },
-    { name = "kcontrolplane3", ip = "172.16.16.103", memory = 4096, vcpu = 2 }
-  ]
-  worker_vms = [
-    { name = "kworker1", ip = "172.16.16.201", memory = 8192, vcpu = 4 },
-    { name = "kworker2", ip = "172.16.16.202", memory = 8192, vcpu = 4 },
-    { name = "kworker3", ip = "172.16.16.203", memory = 8192, vcpu = 4 }
-  ]
-  all_vms = concat(local.lb_vms, local.cp_vms, local.worker_vms)
 }
 
 resource "libvirt_volume" "lb" {
@@ -68,11 +57,32 @@ resource "libvirt_volume" "lb" {
   size             = 10737418240  # 10 GB
 }
 
+data "template_file" "lb_user_data" {
+  count    = length(local.lb_vms)
+  template = file("${path.module}/cloud_init_user_data.tpl")
+
+  vars = {
+    hostname   = local.lb_vms[count.index].name
+    public_key = var.kube_ssh_public_key
+  }
+}
+
+data "template_file" "lb_network_config" {
+  count    = length(local.lb_vms)
+  template = file("${path.module}/cloud_init_network_config.tpl")
+
+  vars = {
+    ip      = local.lb_vms[count.index].ip
+    gateway = var.gateway
+    dns     = var.dns
+  }
+}
+
 resource "libvirt_cloudinit_disk" "lb" {
   count          = length(local.lb_vms)
   name           = "${local.lb_vms[count.index].name}-cloudinit.iso"
-  user_data      = templatefile("${path.module}/cloud_init_user_data.tpl", { hostname = local.lb_vms[count.index].name, public_key = var.kube_ssh_public_key })
-  network_config = templatefile("${path.module}/cloud_init_network_config.tpl", { ip = local.lb_vms[count.index].ip, gateway = var.gateway, dns = var.dns })
+  user_data      = data.template_file.lb_user_data[count.index].rendered
+  network_config = data.template_file.lb_network_config[count.index].rendered
   pool           = "default"
 }
 
@@ -81,7 +91,6 @@ resource "libvirt_domain" "lb" {
   name   = local.lb_vms[count.index].name
   memory = local.lb_vms[count.index].memory
   vcpu   = local.lb_vms[count.index].vcpu
-  qemu_agent = true  # Enable for IP retrieval
 
   cloudinit = libvirt_cloudinit_disk.lb[count.index].id
 
@@ -90,8 +99,8 @@ resource "libvirt_domain" "lb" {
   }
 
   network_interface {
-    network_name = "default"
-    wait_for_lease = true
+    network_name   = "default"
+    wait_for_lease = true  # Wait for IP lease to improve detection
   }
 
   console {
@@ -105,13 +114,17 @@ resource "libvirt_domain" "lb" {
     listen_type = "address"
     autoport    = true
   }
-
-  timeouts {
-    create = "10m"  # Increase for boot/IP wait
-  }
 }
 
 # --- Control Planes (3 VMs) ---
+locals {
+  cp_vms = [
+    { name = "kcontrolplane1", ip = "172.16.16.101", memory = 4096, vcpu = 2 },
+    { name = "kcontrolplane2", ip = "172.16.16.102", memory = 4096, vcpu = 2 },
+    { name = "kcontrolplane3", ip = "172.16.16.103", memory = 4096, vcpu = 2 }
+  ]
+}
+
 resource "libvirt_volume" "cp" {
   count            = length(local.cp_vms)
   name             = "${local.cp_vms[count.index].name}.qcow2"
@@ -120,11 +133,32 @@ resource "libvirt_volume" "cp" {
   size             = 21474836480  # 20 GB
 }
 
+data "template_file" "cp_user_data" {
+  count    = length(local.cp_vms)
+  template = file("${path.module}/cloud_init_user_data.tpl")
+
+  vars = {
+    hostname   = local.cp_vms[count.index].name
+    public_key = var.kube_ssh_public_key
+  }
+}
+
+data "template_file" "cp_network_config" {
+  count    = length(local.cp_vms)
+  template = file("${path.module}/cloud_init_network_config.tpl")
+
+  vars = {
+    ip      = local.cp_vms[count.index].ip
+    gateway = var.gateway
+    dns     = var.dns
+  }
+}
+
 resource "libvirt_cloudinit_disk" "cp" {
   count          = length(local.cp_vms)
   name           = "${local.cp_vms[count.index].name}-cloudinit.iso"
-  user_data      = templatefile("${path.module}/cloud_init_user_data.tpl", { hostname = local.cp_vms[count.index].name, public_key = var.kube_ssh_public_key })
-  network_config = templatefile("${path.module}/cloud_init_network_config.tpl", { ip = local.cp_vms[count.index].ip, gateway = var.gateway, dns = var.dns })
+  user_data      = data.template_file.cp_user_data[count.index].rendered
+  network_config = data.template_file.cp_network_config[count.index].rendered
   pool           = "default"
 }
 
@@ -133,7 +167,6 @@ resource "libvirt_domain" "cp" {
   name   = local.cp_vms[count.index].name
   memory = local.cp_vms[count.index].memory
   vcpu   = local.cp_vms[count.index].vcpu
-  qemu_agent = true
 
   cloudinit = libvirt_cloudinit_disk.cp[count.index].id
 
@@ -142,8 +175,8 @@ resource "libvirt_domain" "cp" {
   }
 
   network_interface {
-    network_name = "default"
-    wait_for_lease = true
+    network_name   = "default"
+    wait_for_lease = true  # Wait for IP lease to improve detection
   }
 
   console {
@@ -157,13 +190,17 @@ resource "libvirt_domain" "cp" {
     listen_type = "address"
     autoport    = true
   }
-
-  timeouts {
-    create = "10m"
-  }
 }
 
 # --- Workers (3 VMs) ---
+locals {
+  worker_vms = [
+    { name = "kworker1", ip = "172.16.16.201", memory = 8192, vcpu = 4 },
+    { name = "kworker2", ip = "172.16.16.202", memory = 8192, vcpu = 4 },
+    { name = "kworker3", ip = "172.16.16.203", memory = 8192, vcpu = 4 }
+  ]
+}
+
 resource "libvirt_volume" "worker" {
   count            = length(local.worker_vms)
   name             = "${local.worker_vms[count.index].name}.qcow2"
@@ -172,11 +209,32 @@ resource "libvirt_volume" "worker" {
   size             = 32212254720  # 30 GB
 }
 
+data "template_file" "worker_user_data" {
+  count    = length(local.worker_vms)
+  template = file("${path.module}/cloud_init_user_data.tpl")
+
+  vars = {
+    hostname   = local.worker_vms[count.index].name
+    public_key = var.kube_ssh_public_key
+  }
+}
+
+data "template_file" "worker_network_config" {
+  count    = length(local.worker_vms)
+  template = file("${path.module}/cloud_init_network_config.tpl")
+
+  vars = {
+    ip      = local.worker_vms[count.index].ip
+    gateway = var.gateway
+    dns     = var.dns
+  }
+}
+
 resource "libvirt_cloudinit_disk" "worker" {
   count          = length(local.worker_vms)
   name           = "${local.worker_vms[count.index].name}-cloudinit.iso"
-  user_data      = templatefile("${path.module}/cloud_init_user_data.tpl", { hostname = local.worker_vms[count.index].name, public_key = var.kube_ssh_public_key })
-  network_config = templatefile("${path.module}/cloud_init_network_config.tpl", { ip = local.worker_vms[count.index].ip, gateway = var.gateway, dns = var.dns })
+  user_data      = data.template_file.worker_user_data[count.index].rendered
+  network_config = data.template_file.worker_network_config[count.index].rendered
   pool           = "default"
 }
 
@@ -185,7 +243,6 @@ resource "libvirt_domain" "worker" {
   name   = local.worker_vms[count.index].name
   memory = local.worker_vms[count.index].memory
   vcpu   = local.worker_vms[count.index].vcpu
-  qemu_agent = true
 
   cloudinit = libvirt_cloudinit_disk.worker[count.index].id
 
@@ -194,8 +251,8 @@ resource "libvirt_domain" "worker" {
   }
 
   network_interface {
-    network_name = "default"
-    wait_for_lease = true
+    network_name   = "default"
+    wait_for_lease = true  # Wait for IP lease to improve detection
   }
 
   console {
@@ -209,24 +266,10 @@ resource "libvirt_domain" "worker" {
     listen_type = "address"
     autoport    = true
   }
-
-  timeouts {
-    create = "10m"
-  }
 }
 
-# Poll for IPs after creation
-resource "null_resource" "wait_for_ips" {
-  depends_on = [libvirt_domain.lb, libvirt_domain.cp, libvirt_domain.worker]  # Reference arrays directly
-
-  provisioner "local-exec" {
-    command = "sleep 120"  # Wait 2 min for boot/agent
-  }
-}
-
-# Generate Ansible inventory.ini (depends on wait)
+# Generate Ansible inventory.ini
 data "template_file" "inventory" {
-  depends_on = [null_resource.wait_for_ips]
   template = file("${path.module}/inventory.tpl")
 
   vars = {
@@ -246,13 +289,18 @@ resource "local_file" "inventory" {
   filename = "${path.module}/../ansible/inventory.ini"
 }
 
-# Outputs
+# Outputs (consolidated here)
 output "vm_ips" {
-  value = merge(
-    { for i in range(length(local.lb_vms)) : local.lb_vms[i].name => try(libvirt_domain.lb[i].network_interface[0].addresses[0], local.lb_vms[i].ip) },
-    { for i in range(length(local.cp_vms)) : local.cp_vms[i].name => try(libvirt_domain.cp[i].network_interface[0].addresses[0], local.cp_vms[i].ip) },
-    { for i in range(length(local.worker_vms)) : local.worker_vms[i].name => try(libvirt_domain.worker[i].network_interface[0].addresses[0], local.worker_vms[i].ip) }
-  )
+  value = {
+    loadbalancer1  = try(libvirt_domain.lb[0].network_interface[0].addresses[0], local.lb_vms[0].ip)
+    loadbalancer2  = try(libvirt_domain.lb[1].network_interface[0].addresses[0], local.lb_vms[1].ip)
+    kcontrolplane1 = try(libvirt_domain.cp[0].network_interface[0].addresses[0], local.cp_vms[0].ip)
+    kcontrolplane2 = try(libvirt_domain.cp[1].network_interface[0].addresses[0], local.cp_vms[1].ip)
+    kcontrolplane3 = try(libvirt_domain.cp[2].network_interface[0].addresses[0], local.cp_vms[2].ip)
+    kworker1       = try(libvirt_domain.worker[0].network_interface[0].addresses[0], local.worker_vms[0].ip)
+    kworker2       = try(libvirt_domain.worker[1].network_interface[0].addresses[0], local.worker_vms[1].ip)
+    kworker3       = try(libvirt_domain.worker[2].network_interface[0].addresses[0], local.worker_vms[2].ip)
+  }
   description = "IPs of all provisioned VMs"
 }
 
