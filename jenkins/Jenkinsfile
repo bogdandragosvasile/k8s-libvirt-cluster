@@ -1,165 +1,165 @@
 pipeline {
-    agent {
-        docker {
-            image 'bogdandragos/jenkins-k8s-libvirt-agent:latest'  // Use your custom image
-            args '--user 0 -v /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock -v /run/libvirt:/run/libvirt -v /var/lib/libvirt/images:/var/lib/libvirt/images --privileged --network host'
-            reuseNode true
-        }
+  agent {
+    docker {
+      image 'bogdandragos/jenkins-k8s-libvirt-agent:latest'
+      args """
+        --user 0
+        --privileged
+        --network host
+        -v /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
+        -v /run/libvirt:/run/libvirt
+        -v /var/lib/libvirt/images:/var/lib/libvirt/images
+        -v /root/.ssh:/root/.ssh:ro
+        -v /root/.ssh/known_hosts:/etc/ssh/ssh_known_hosts:ro
+      """
+      reuseNode true
+    }
+  }
+
+  options {
+    ansiColor('xterm')
+    timestamps()
+    timeout(time: 60, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+  }
+
+  environment {
+    LIBVIRT_URI         = 'qemu:///system'
+    ANSIBLE_INVENTORY   = 'inventory.ini'
+    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')
+  }
+
+  stages {
+    stage('Prepare Base Image') {
+      steps {
+        sh '''
+          echo "\\033[36m[Prepare Base Image]\\033[0m"
+          BASE_IMAGE_PATH="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
+          BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+          if [ ! -f "$BASE_IMAGE_PATH" ]; then
+            echo "Downloading base image..."
+            wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE_PATH" --progress=dot:giga
+          else
+            echo "Base image already exists - skipping download."
+          fi
+          chmod 666 "$BASE_IMAGE_PATH" || true
+          chown 107:107 "$BASE_IMAGE_PATH" || true
+        '''
+      }
     }
 
-    environment {
-        LIBVIRT_URI = 'qemu:///system'
-        ANSIBLE_INVENTORY = 'inventory.ini'  // Relative to ansible dir
-        KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')  // Fetch credential here
+    stage('Setup Libvirt Pool') {
+      steps {
+        sh '''
+          echo "\\033[36m[Setup Libvirt Pool]\\033[0m"
+          virsh pool-define-as default dir --target /var/lib/libvirt/images || true
+          virsh pool-start default || true
+          virsh pool-autostart default || true
+        '''
+      }
     }
 
-    stages {
-        stage('Prepare Base Image') {
-            steps {
-                timeout(time: 5, unit: 'MINUTES') {  // Prevent infinite download hangs
-                    sh '''
-                    echo "Starting base image preparation..."
-                    BASE_IMAGE_PATH="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
-                    BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
-                    if [ ! -f "$BASE_IMAGE_PATH" ]; then
-                        echo "Downloading base image (~500 MB) - this may take a minute..."
-                        wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE_PATH" --progress=dot:giga  # Show progress
-                    else
-                        echo "Base image already exists - skipping download."
-                    fi
-                    chmod 666 "$BASE_IMAGE_PATH"  # Make readable by all, including qemu process
-                    chown 107:107 "$BASE_IMAGE_PATH" || true  # Align with libvirt-qemu UID/GID (adjust if needed)
-                    echo "Base image preparation complete."
-                    '''
-                }
-            }
-        }
-
-        stage('Setup Libvirt Pool') {
-            steps {
-                sh '''
-                # Ensure the default storage pool exists and is active
-                virsh pool-define-as default dir --target /var/lib/libvirt/images || true
-                virsh pool-start default || true
-                virsh pool-autostart default || true
-                '''
-            }
-        }
-
-        stage('Setup SSH Known Hosts') {
-            steps {
-                sh '''
-                mkdir -p ~/.ssh
-                ssh-keyscan -H github.com >> ~/.ssh/known_hosts
-                chmod 600 ~/.ssh/known_hosts
-                '''
-            }
-        }
-
-        stage('Checkout') {
-            steps {
-                git url: 'git@github.com:bogdandragosvasile/k8s-libvirt-cluster.git', branch: 'master', credentialsId: 'github-ssh-key'
-            }
-        }
-
-        stage('Terraform Init') {
-            steps {
-                dir('terraform') {
-                    sh 'terraform init'
-                }
-            }
-        }
-
-        stage('Terraform Plan') {
-            steps {
-                dir('terraform') {
-                    sh 'terraform plan -var="kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}" -out=plan.tfout'
-                }
-            }
-        }
-
-        stage('Terraform Apply') {
-            steps {
-                dir('terraform') {
-                    sh 'terraform apply -auto-approve plan.tfout'
-                }
-            }
-        }
-
-        stage('Generate Ansible Inventory') {
-            steps {
-                dir('terraform') {
-                    sh '''
-                    echo "Generating outputs.json from Terraform outputs..."
-                    terraform output -json > outputs.json
-                    echo "outputs.json contents:"
-                    cat outputs.json  # Debug
-                    '''
-                }
-                sh '''
-                echo "Generating vars.yaml from outputs.json..."
-                # Convert JSON to valid YAML format (add --- header)
-                echo "---" > ansible/vars.yaml
-                jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
-                echo "vars.yaml contents:"
-                cat ansible/vars.yaml  # Debug
-                echo "Inventory file check:"
-                ls -l ansible/inventory.ini  # Ensure it exists (generated by Terraform)
-                '''
-            }
-        }
-
-        stage('Wait for VMs to be Reachable') {
-            steps {
-                sh '''
-                MAX_RETRIES=90  # 15 minutes for boot/SSH startup
-                SLEEP_TIME=10
-                cd terraform  # Change to terraform dir for outputs.json
-                for host in $(jq -r '.vm_ips.value[]' outputs.json); do
-                    echo "Checking reachability for $host..."
-                    for i in $(seq 1 $MAX_RETRIES); do
-                        if ping -c 1 $host > /dev/null 2>&1 && nc -zv $host 22; then
-                            echo "$host is reachable on port 22."
-                            break
-                        fi
-                        echo "Waiting for $host to be reachable... ($i/$MAX_RETRIES)"
-                        sleep $SLEEP_TIME
-                    done
-                    if [ $i -eq $MAX_RETRIES ]; then
-                        echo "Failed to reach $host after $MAX_RETRIES attempts."
-                        exit 1
-                    fi
-                done
-                '''
-            }
-        }
-
-        stage('Ansible Setup') {
-            steps {
-                dir('ansible') {
-                    sh '''
-                    echo "Running main Ansible playbook with inventory: ${ANSIBLE_INVENTORY}"
-                    ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" -vvv  # Verbose for debugging
-                    '''
-                }
-            }
-        }
-
-        stage('Verify Cluster') {
-            steps {
-                echo 'Cluster setup complete. Verify with kubectl get nodes or similar.'
-            }
-        }
+    stage('Checkout') {
+      steps {
+        git url: 'git@github.com:bogdandragosvasile/k8s-libvirt-cluster.git',
+            branch: 'master',
+            credentialsId: 'github-ssh-key'
+      }
     }
 
-    post {
-        always {
-            echo 'Pipeline completed.'
+    stage('Terraform Init') {
+      steps {
+        dir('terraform') {
+          sh 'terraform init'
         }
-        failure {
-            node('') {  // Ensure a node context for cleanup
-                sh './libvirt-clean.sh || true'  // Run cleanup, ignore if script not found
-            }
-        }
+      }
     }
+
+    stage('Terraform Plan') {
+      steps {
+        dir('terraform') {
+          sh '''
+            terraform plan \
+              -var="kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}" \
+              -out=plan.tfout
+          '''
+        }
+      }
+    }
+
+    stage('Terraform Apply') {
+      steps {
+        dir('terraform') {
+          sh 'terraform apply -auto-approve plan.tfout'
+        }
+      }
+    }
+
+    stage('Generate Ansible Inventory') {
+      steps {
+        dir('terraform') {
+          sh 'terraform output -json > outputs.json && cat outputs.json'
+        }
+        sh '''
+          echo "---" > ansible/vars.yaml
+          jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
+          cat ansible/vars.yaml
+          ls -l ansible/inventory.ini
+        '''
+      }
+    }
+
+    stage('Wait for VMs') {
+      steps {
+        sh '''
+          MAX_RETRIES=90
+          SLEEP_TIME=10
+          cd terraform
+          for host in $(jq -r '.vm_ips.value | to_entries | map(.value) | .[]' outputs.json); do
+            echo "Checking $host ..."
+            for i in $(seq 1 $MAX_RETRIES); do
+              if ping -c 1 $host > /dev/null 2>&1 && nc -z -w 2 $host 22 > /dev/null 2>&1; then
+                echo "OK: $host reachable on 22"
+                break
+              fi
+              echo "Waiting for $host... ($i/$MAX_RETRIES)"
+              sleep $SLEEP_TIME
+            done
+            if [ $i -eq $MAX_RETRIES ]; then
+              echo "\\033[31mERROR: $host not reachable\\033[0m"
+              exit 1
+            fi
+          done
+        '''
+      }
+    }
+
+    stage('Ansible Setup') {
+      steps {
+        dir('ansible') {
+          sh 'ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" -vv'
+        }
+      }
+    }
+
+    stage('Verify Cluster') {
+      steps {
+        echo 'Cluster setup complete — verify with kubectl using your generated kubeconfig.'
+      }
+    }
+  }
+
+  post {
+    always {
+      echo 'Pipeline finished.'
+    }
+    failure {
+      sh '''
+        echo "\\033[33m[Cleanup on Failure]\\033[0m"
+        if [ -x ./scripts/cleanup_vms.sh ]; then
+          sudo ./scripts/cleanup_vms.sh || true
+        fi
+      '''
+    }
+  }
 }
