@@ -111,11 +111,113 @@ resource "libvirt_domain" "lb" {
   }
 }
 
-# Repeat similar blocks for cp and worker (omitted for brevity; use same structure as lb with their locals)
+# --- Control Planes (3 VMs) ---
+resource "libvirt_volume" "cp" {
+  count            = length(local.cp_vms)
+  name             = "${local.cp_vms[count.index].name}.qcow2"
+  base_volume_id   = libvirt_volume.base.id
+  pool             = "default"
+  size             = 21474836480  # 20 GB
+}
+
+resource "libvirt_cloudinit_disk" "cp" {
+  count          = length(local.cp_vms)
+  name           = "${local.cp_vms[count.index].name}-cloudinit.iso"
+  user_data      = templatefile("${path.module}/cloud_init_user_data.tpl", { hostname = local.cp_vms[count.index].name, public_key = var.kube_ssh_public_key })
+  network_config = templatefile("${path.module}/cloud_init_network_config.tpl", { ip = local.cp_vms[count.index].ip, gateway = var.gateway, dns = var.dns })
+  pool           = "default"
+}
+
+resource "libvirt_domain" "cp" {
+  count  = length(local.cp_vms)
+  name   = local.cp_vms[count.index].name
+  memory = local.cp_vms[count.index].memory
+  vcpu   = local.cp_vms[count.index].vcpu
+  qemu_agent = true
+
+  cloudinit = libvirt_cloudinit_disk.cp[count.index].id
+
+  disk {
+    volume_id = libvirt_volume.cp[count.index].id
+  }
+
+  network_interface {
+    network_name = "default"
+    wait_for_lease = true
+  }
+
+  console {
+    type        = "pty"
+    target_port = "0"
+    target_type = "serial"
+  }
+
+  graphics {
+    type        = "spice"
+    listen_type = "address"
+    autoport    = true
+  }
+
+  timeouts {
+    create = "10m"
+  }
+}
+
+# --- Workers (3 VMs) ---
+resource "libvirt_volume" "worker" {
+  count            = length(local.worker_vms)
+  name             = "${local.worker_vms[count.index].name}.qcow2"
+  base_volume_id   = libvirt_volume.base.id
+  pool             = "default"
+  size             = 32212254720  # 30 GB
+}
+
+resource "libvirt_cloudinit_disk" "worker" {
+  count          = length(local.worker_vms)
+  name           = "${local.worker_vms[count.index].name}-cloudinit.iso"
+  user_data      = templatefile("${path.module}/cloud_init_user_data.tpl", { hostname = local.worker_vms[count.index].name, public_key = var.kube_ssh_public_key })
+  network_config = templatefile("${path.module}/cloud_init_network_config.tpl", { ip = local.worker_vms[count.index].ip, gateway = var.gateway, dns = var.dns })
+  pool           = "default"
+}
+
+resource "libvirt_domain" "worker" {
+  count  = length(local.worker_vms)
+  name   = local.worker_vms[count.index].name
+  memory = local.worker_vms[count.index].memory
+  vcpu   = local.worker_vms[count.index].vcpu
+  qemu_agent = true
+
+  cloudinit = libvirt_cloudinit_disk.worker[count.index].id
+
+  disk {
+    volume_id = libvirt_volume.worker[count.index].id
+  }
+
+  network_interface {
+    network_name = "default"
+    wait_for_lease = true
+  }
+
+  console {
+    type        = "pty"
+    target_port = "0"
+    target_type = "serial"
+  }
+
+  graphics {
+    type        = "spice"
+    listen_type = "address"
+    autoport    = true
+  }
+
+  timeouts {
+    create = "10m"
+  }
+}
 
 # Poll for IPs after creation
 resource "null_resource" "wait_for_ips" {
-  depends_on = [libvirt_domain.lb, libvirt_domain.cp, libvirt_domain.worker]  # Add all domain resources
+  depends_on = [libvirt_domain.lb, libvirt_domain.cp, libvirt_domain.worker]  # Reference arrays directly
 
   provisioner "local-exec" {
     command = "sleep 120"  # Wait 2 min for boot/agent
@@ -146,7 +248,11 @@ resource "local_file" "inventory" {
 
 # Outputs
 output "vm_ips" {
-  value = { for vm in local.all_vms : vm.name => try(libvirt_domain[vm.name].network_interface[0].addresses[0], vm.ip) }  # Use map for all VMs
+  value = merge(
+    { for i in range(length(local.lb_vms)) : local.lb_vms[i].name => try(libvirt_domain.lb[i].network_interface[0].addresses[0], local.lb_vms[i].ip) },
+    { for i in range(length(local.cp_vms)) : local.cp_vms[i].name => try(libvirt_domain.cp[i].network_interface[0].addresses[0], local.cp_vms[i].ip) },
+    { for i in range(length(local.worker_vms)) : local.worker_vms[i].name => try(libvirt_domain.worker[i].network_interface[0].addresses[0], local.worker_vms[i].ip) }
+  )
   description = "IPs of all provisioned VMs"
 }
 
