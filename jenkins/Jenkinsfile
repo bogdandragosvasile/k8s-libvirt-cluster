@@ -10,7 +10,6 @@ pipeline {
         -v /run/libvirt:/run/libvirt
         -v /var/lib/libvirt/images:/var/lib/libvirt/images
         -v /root/.ssh:/root/.ssh:ro
-        -v /root/.ssh/known_hosts:/etc/ssh/ssh_known_hosts:ro
       """
       reuseNode true
     }
@@ -26,7 +25,7 @@ pipeline {
   environment {
     LIBVIRT_URI         = 'qemu:///system'
     ANSIBLE_INVENTORY   = 'inventory.ini'
-    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')
+    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')  // public key from /root/.ssh/id_ed25519.pub
   }
 
   stages {
@@ -59,7 +58,7 @@ pipeline {
       }
     }
 
-    stage('Checkout') {
+    stage('Checkout Code') {
       steps {
         git url: 'git@github.com:bogdandragosvasile/k8s-libvirt-cluster.git',
             branch: 'master',
@@ -101,32 +100,37 @@ pipeline {
           sh 'terraform output -json > outputs.json && cat outputs.json'
         }
         sh '''
+          echo "\\033[36m[Build vars.yaml]\\033[0m"
           echo "---" > ansible/vars.yaml
           jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
           cat ansible/vars.yaml
+          echo "\\033[36m[Check inventory.ini]\\033[0m"
           ls -l ansible/inventory.ini
         '''
       }
     }
 
-    stage('Wait for VMs') {
+    stage('Wait for VMs to be Reachable via SSH') {
       steps {
         sh '''
-          MAX_RETRIES=90
+          echo "\\033[36m[Wait for VMs over SSH]\\033[0m"
+          MAX_RETRIES=60
           SLEEP_TIME=10
           cd terraform
+
           for host in $(jq -r '.vm_ips.value | to_entries | map(.value) | .[]' outputs.json); do
-            echo "Checking $host ..."
+            echo "Checking SSH access on $host..."
             for i in $(seq 1 $MAX_RETRIES); do
-              if ping -c 1 $host > /dev/null 2>&1 && nc -z -w 2 $host 22 > /dev/null 2>&1; then
-                echo "OK: $host reachable on 22"
+              if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                -i /root/.ssh/id_ed25519 -o ConnectTimeout=3 ubuntu@$host 'true' 2>/dev/null; then
+                echo "OK: $host reachable via SSH"
                 break
               fi
               echo "Waiting for $host... ($i/$MAX_RETRIES)"
               sleep $SLEEP_TIME
             done
             if [ $i -eq $MAX_RETRIES ]; then
-              echo "\\033[31mERROR: $host not reachable\\033[0m"
+              echo "\\033[31mERROR: $host not reachable via SSH\\033[0m"
               exit 1
             fi
           done
@@ -134,30 +138,34 @@ pipeline {
       }
     }
 
-    stage('Ansible Setup') {
+    stage('Run Ansible Playbook') {
       steps {
         dir('ansible') {
-          sh 'ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" -vv'
+          sh '''
+            echo "\\033[36m[Ansible Setup]\\033[0m"
+            ANSIBLE_HOST_KEY_CHECKING=False \
+            ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" -vv
+          '''
         }
       }
     }
 
     stage('Verify Cluster') {
       steps {
-        echo 'Cluster setup complete — verify with kubectl using your generated kubeconfig.'
+        echo 'Cluster setup complete — verify with kubectl once kubeconfig is available.'
       }
     }
   }
 
   post {
     always {
-      echo 'Pipeline finished.'
+      echo 'Pipeline completed.'
     }
     failure {
       sh '''
         echo "\\033[33m[Cleanup on Failure]\\033[0m"
         if [ -x ./scripts/cleanup_vms.sh ]; then
-          sudo ./scripts/cleanup_vms.sh || true
+          ./scripts/cleanup_vms.sh || true
         fi
       '''
     }
