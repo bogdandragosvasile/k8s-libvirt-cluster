@@ -22,6 +22,7 @@ packages:
   - sudo
   - net-tools
   - ufw
+  - qemu-guest-agent  # Add this for IP retrieval by libvirt
 
 runcmd:
   - systemctl stop unattended-upgrades apt-daily.timer apt-daily-upgrade.timer || true
@@ -30,4 +31,6 @@ runcmd:
   - echo "ubuntu ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
   - ufw allow 22 || true
   - systemctl enable --now ssh
+  - systemctl enable --now qemu-guest-agent  # Start agent
   - systemctl restart ssh
+  - systemctl restart qemu-guest-agent
