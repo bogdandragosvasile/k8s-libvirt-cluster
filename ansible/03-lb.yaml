@@ -1,10 +1,12 @@
 ---
-- hosts: load_balancer
-  become: yes
+- name: Configure load balancer nodes
+  hosts: load_balancer
+  become: true
   tasks:
-    - name: Check apiserver
-      copy:
+    - name: Create check_apiserver script
+      ansible.builtin.copy:
         dest: "/etc/keepalived/check_apiserver.sh"
+        mode: '0755'
         content: |
           #!/bin/sh
           errorExit() {
@@ -16,11 +18,8 @@
             curl --silent --max-time 2 --insecure https://{{ VIRTUAL_IP }}:{{ K8S_API_SERVER_PORT }}/ -o /dev/null || errorExit "Error GET https://{{ VIRTUAL_IP }}:{{ K8S_API_SERVER_PORT }}/"
           fi
 
-    - name: Make script executable
-      shell: chmod +x /etc/keepalived/check_apiserver.sh
-
-    - name: Haproxy
-      copy:
+    - name: Configure HAProxy
+      ansible.builtin.copy:
         dest: "/etc/haproxy/haproxy.cfg"
         content: |
           global
@@ -49,11 +48,12 @@
             server kcontrolplane2 {{ IP_HOST_CP2 }}:6443 check
             server kcontrolplane3 {{ IP_HOST_CP3 }}:6443 check
 
-- hosts: lb1
-  become: yes
+- name: Configure keepalived on lb1 (MASTER)
+  hosts: loadbalancer1
+  become: true
   tasks:
-    - name: Keepalived
-      copy:
+    - name: Configure keepalived as MASTER
+      ansible.builtin.copy:
         dest: "/etc/keepalived/keepalived.conf"
         content: |
           vrrp_script check_apiserver {
@@ -66,7 +66,7 @@
           }
           vrrp_instance VI_1 {
             state MASTER
-            interface {{ ansible_default_ipv4.interface }}  # Use Ansible fact for interface
+            interface {{ ansible_default_ipv4.interface }}
             virtual_router_id 1
             priority 101
             advert_int 5
@@ -75,18 +75,19 @@
               auth_pass {{ PASSWORD_KEEPALIVED }}
             }
             virtual_ipaddress {
-              172.16.16.100
+              {{ VIRTUAL_IP }}
             }
             track_script {
               check_apiserver
             }
           }
 
-- hosts: lb2
-  become: yes
+- name: Configure keepalived on lb2 (BACKUP)
+  hosts: loadbalancer2
+  become: true
   tasks:
-    - name: Keepalived
-      copy:
+    - name: Configure keepalived as BACKUP
+      ansible.builtin.copy:
         dest: "/etc/keepalived/keepalived.conf"
         content: |
           vrrp_script check_apiserver {
@@ -99,7 +100,7 @@
           }
           vrrp_instance VI_1 {
             state BACKUP
-            interface {{ ansible_default_ipv4.interface }}  # Use Ansible fact for interface
+            interface {{ ansible_default_ipv4.interface }}
             virtual_router_id 1
             priority 100
             advert_int 5
@@ -108,22 +109,24 @@
               auth_pass {{ PASSWORD_KEEPALIVED }}
             }
             virtual_ipaddress {
-              172.16.16.100
+              {{ VIRTUAL_IP }}
             }
             track_script {
               check_apiserver
             }
           }
 
-- hosts: load_balancer
-  become: yes
+- name: Enable HA services
+  hosts: load_balancer
+  become: true
   tasks:
-    - name: Keepalived services
-      systemd:
+    - name: Start and enable keepalived
+      ansible.builtin.systemd:
         state: restarted
         name: keepalived
-
-    - name: Haproxy services
-      systemd:
+        enabled: true
+    - name: Start and enable haproxy
+      ansible.builtin.systemd:
         state: restarted
         name: haproxy
+        enabled: true

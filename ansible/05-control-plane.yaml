@@ -1,71 +1,92 @@
 ---
-- hosts: control1
-  become: yes
+- name: Initialize first control plane node
+  hosts: kcontrolplane1
+  become: true
   tasks:
-    - name: Initialise the cluster
-      shell: kubeadm init --control-plane-endpoint="{{ VIRTUAL_IP }}:{{ K8S_API_SERVER_PORT }}" --upload-certs --apiserver-advertise-address={{ IP_HOST_CP1 }} --pod-network-cidr=192.168.0.0/16
+    - name: Initialize the cluster
+      ansible.builtin.shell: |
+        kubeadm init \
+          --control-plane-endpoint="{{ VIRTUAL_IP }}:{{ K8S_API_SERVER_PORT }}" \
+          --upload-certs \
+          --apiserver-advertise-address={{ IP_HOST_CP1 }} \
+          --pod-network-cidr={{ POD_CIDR_CALICO }}
+      args:
+        creates: /etc/kubernetes/admin.conf
       register: cluster_initialized
 
-    - debug: msg="{{ cluster_initialized.stdout }}"
+    - name: Display cluster init output
+      ansible.builtin.debug:
+        msg: "{{ cluster_initialized.stdout }}"
 
     - name: Create .kube directory for ubuntu user
-      file:
+      ansible.builtin.file:
         path: /home/ubuntu/.kube
         state: directory
-        mode: 0755
+        mode: '0755'
         owner: ubuntu
+        group: ubuntu
 
     - name: Copy admin.conf to ubuntu user's kube config
-      copy:
+      ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
         dest: /home/ubuntu/.kube/config
         remote_src: yes
         owner: ubuntu
-        mode: 0600
+        group: ubuntu
+        mode: '0600'
 
     - name: Get join command
-      shell: kubeadm token create --print-join-command
+      ansible.builtin.shell: kubeadm token create --print-join-command
       register: join_command_raw
 
-    - name: Set join command
-      set_fact:
-        join_command: "{{ join_command_raw.stdout_lines[0] }}"
+    - name: Set join command fact
+      ansible.builtin.set_fact:
+        join_command: "{{ join_command_raw.stdout }}"
 
-    - name: Get cert
-      shell: kubeadm init phase upload-certs --upload-certs
+    - name: Get certificate key
+      ansible.builtin.shell: kubeadm init phase upload-certs --upload-certs
       register: get_cert_raw
 
-    - name: Set cert
-      set_fact:
-        cert_command: "{{ get_cert_raw.stdout_lines[2] }}"
+    - name: Set certificate key fact
+      ansible.builtin.set_fact:
+        cert_command: "{{ (get_cert_raw.stdout_lines | select('match','^[0-9a-fA-F]{64}$') | list | first) | default('') }}"
 
-    - name: Install Pod network (CNI)
-      shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf create -f https://raw.githubusercontent.com/projectcalico/calico/{{ VERSION_CALICO }}/manifests/calico.yaml
-      args:
-        chdir: $HOME
-        creates: pod_network_setup.txt
+    - name: Install Calico CNI
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ VERSION_CALICO }}/manifests/calico.yaml
+      args: { warn: false }
 
-- hosts: control2,control3
-  become: yes
+- name: Join additional control plane nodes
+  hosts: kcontrolplane2,kcontrolplane3
+  become: true
   tasks:
-    - name: Join control-plane
-      shell: "{{ hostvars['control1'].join_command }} --control-plane --certificate-key={{ hostvars['control1'].cert_command }} --apiserver-advertise-address={{ ansible_default_ipv4.address }} >> node_joined.txt"
-      register: node_joined
+    - name: Join control plane
+      ansible.builtin.shell: |
+        {{ hostvars['kcontrolplane1'].join_command }} \
+        --control-plane \
+        --certificate-key={{ hostvars['kcontrolplane1'].cert_command }} \
+        --apiserver-advertise-address={{ ansible_default_ipv4.address }} \
+        >> /root/node_joined.txt
+      args:
+        creates: /root/node_joined.txt
 
-- hosts: control_plane
-  become: yes
+- name: Setup kubeconfig on all control plane nodes
+  hosts: control_plane
+  become: true
   tasks:
     - name: Create .kube directory for ubuntu user
-      file:
+      ansible.builtin.file:
         path: /home/ubuntu/.kube
         state: directory
-        mode: 0755
+        mode: '0755'
         owner: ubuntu
+        group: ubuntu
 
     - name: Copy admin.conf to ubuntu user's kube config
-      copy:
+      ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
         dest: /home/ubuntu/.kube/config
         remote_src: yes
         owner: ubuntu
-        mode: 0600
+        group: ubuntu
+        mode: '0600'

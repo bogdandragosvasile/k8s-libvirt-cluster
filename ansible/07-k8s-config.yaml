@@ -1,12 +1,25 @@
 ---
-- hosts: control1
-  become: yes
-  gather_facts: false
+- name: Final cluster configuration
+  hosts: kcontrolplane1
+  become: true
   tasks:
-    - name: Copy config file to user's kube directory
-      copy:
+    - name: Copy admin.conf to ubuntu user's kube config
+      ansible.builtin.copy:
         src: /etc/kubernetes/admin.conf
-        dest: ~/.kube/config
+        dest: /home/ubuntu/.kube/config
         owner: ubuntu
-        mode: 0600
+        group: ubuntu
+        mode: '0600'
         remote_src: yes
+
+    - name: Verify cluster is ready
+      ansible.builtin.shell: |
+        kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes
+      register: cluster_nodes
+      retries: 30
+      delay: 10
+      until: cluster_nodes.rc == 0
+
+    - name: Display cluster nodes
+      ansible.builtin.debug:
+        msg: "{{ cluster_nodes.stdout }}"

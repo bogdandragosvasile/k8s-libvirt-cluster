@@ -1,27 +1,28 @@
 ---
-- hosts: all
-  become: yes
+- name: Install base packages on all nodes
+  hosts: all
+  become: true
   tasks:
-    - name: Update repo
-      apt: update_cache=yes force_apt_get=yes cache_valid_time=3600
-
-    - name: Install necessary packages for all
-      apt:
+    - name: Install essential tools
+      ansible.builtin.apt:
         name:
           - apt-transport-https
           - gpg
           - curl
           - ca-certificates
         state: present
-        update_cache: true
+        update_cache: yes
+        lock_timeout: 1200
 
-- hosts: load_balancer
-  become: yes
+- name: Install HA packages on load balancers
+  hosts: load_balancer
+  become: true
   tasks:
-    - name: Install HA packages
-      apt:
+    - name: Install keepalived and haproxy
+      ansible.builtin.apt:
         name:
           - keepalived
           - haproxy
         state: present
-        update_cache: true
+        update_cache: yes
+        lock_timeout: 1200

@@ -1,9 +1,42 @@
 ---
-- hosts: all
-  become: yes
+- name: System preparation and apt lock elimination
+  hosts: all
+  become: true
   tasks:
+    - name: Disable and mask unattended-upgrades
+      ansible.builtin.systemd:
+        name: unattended-upgrades
+        state: stopped
+        enabled: false
+        masked: true
+      ignore_errors: true
+
+    - name: Stop apt-daily timer
+      ansible.builtin.systemd:
+        name: apt-daily.timer
+        state: stopped
+        enabled: false
+      ignore_errors: true
+
+    - name: Stop apt-daily-upgrade timer
+      ansible.builtin.systemd:
+        name: apt-daily-upgrade.timer
+        state: stopped
+        enabled: false
+      ignore_errors: true
+
+    - name: Kill any unattended-upgrade processes
+      ansible.builtin.shell: pkill -9 unattended-upgrade || true
+      args: { warn: false }
+      ignore_errors: true
+
+    - name: Kill any apt/dpkg processes holding locks
+      ansible.builtin.shell: pkill -9 apt apt-get dpkg || true
+      args: { warn: false }
+      ignore_errors: true
+
     - name: Create kubeadmin user
-      user:
+      ansible.builtin.user:
         name: kubeadmin
         state: present
         groups: sudo
@@ -12,15 +45,16 @@
         password: "{{ PASSWORD_KUBEADMIN | password_hash('sha512') }}"
 
     - name: Set up authorized keys for kubeadmin user
-      authorized_key:
+      ansible.builtin.authorized_key:
         user: kubeadmin
         key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
 
-- hosts: control_plane
-  become: yes
+- name: Shell QoL on control planes
+  hosts: control_plane
+  become: true
   tasks:
     - name: Add kubectl alias for ubuntu
-      lineinfile:
+      ansible.builtin.lineinfile:
         path: /home/ubuntu/.bashrc
         line: "alias k='kubectl'"
         owner: ubuntu
@@ -28,9 +62,3 @@
         state: present
         insertafter: EOF
         create: true
-
-    - name: Source .bashrc for ubuntu
-      shell: "source /home/ubuntu/.bashrc"
-      args:
-        executable: /bin/bash
-      become_user: ubuntu

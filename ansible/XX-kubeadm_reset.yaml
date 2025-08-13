@@ -1,9 +1,10 @@
 ---
-- hosts: control_plane
-  become: yes
+- name: Reset Kubernetes cluster
+  hosts: control_plane,workers
+  become: true
   tasks:
     - name: Reset Kubernetes cluster
-      shell: |
+      ansible.builtin.shell: |
         kubeadm reset --force
         rm -rf ~/.kube/
         rm -rf /etc/kubernetes/
@@ -13,4 +14,4 @@
         iptables -t nat -F
         iptables -t mangle -F
         iptables -X
-      ignore_errors: true  # Allow continuation even if some commands fail
+      ignore_errors: true
