@@ -1,14 +1,16 @@
 ---
 - name: Initialize first control plane node
-  hosts: kcontrolplane1
+  hosts: control_plane_init
   become: true
+  vars_files:
+    - vars.yaml
   tasks:
     - name: Initialize the cluster
       ansible.builtin.shell: |
         kubeadm init \
           --control-plane-endpoint="{{ VIRTUAL_IP }}:{{ K8S_API_SERVER_PORT }}" \
           --upload-certs \
-          --apiserver-advertise-address={{ IP_HOST_CP1 }} \
+          --apiserver-advertise-address={{ ansible_default_ipv4.address }} \
           --pod-network-cidr={{ POD_CIDR_CALICO }}
       args:
         creates: /etc/kubernetes/admin.conf
@@ -54,25 +56,34 @@
     - name: Install Calico CNI
       ansible.builtin.shell: |
         kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ VERSION_CALICO }}/manifests/calico.yaml
-      #args: { warn: false }
 
 - name: Join additional control plane nodes
-  hosts: kcontrolplane2,kcontrolplane3
+  hosts: control_plane_join
   become: true
+  vars_files:
+    - vars.yaml
   tasks:
+    - name: Wait for first control plane to be ready
+      ansible.builtin.wait_for:
+        host: "{{ VIRTUAL_IP }}"
+        port: "{{ K8S_API_SERVER_PORT }}"
+        delay: 10
+        timeout: 300
+
     - name: Join control plane
       ansible.builtin.shell: |
-        {{ hostvars['kcontrolplane1'].join_command }} \
-        --control-plane \
-        --certificate-key={{ hostvars['kcontrolplane1'].cert_command }} \
-        --apiserver-advertise-address={{ ansible_default_ipv4.address }} \
-        >> /root/node_joined.txt
+        {{ hostvars[groups['control_plane_init'][0]].join_command }} \
+          --control-plane \
+          --certificate-key={{ hostvars[groups['control_plane_init'][0]].cert_command }} \
+          --apiserver-advertise-address={{ ansible_default_ipv4.address }}
       args:
-        creates: /root/node_joined.txt
+        creates: /etc/kubernetes/admin.conf
 
 - name: Setup kubeconfig on all control plane nodes
   hosts: control_plane
   become: true
+  vars_files:
+    - vars.yaml
   tasks:
     - name: Create .kube directory for ubuntu user
       ansible.builtin.file:
@@ -90,3 +101,12 @@
         owner: ubuntu
         group: ubuntu
         mode: '0600'
+      
+    - name: Verify kubectl access
+      ansible.builtin.shell: kubectl --kubeconfig=/home/ubuntu/.kube/config get nodes
+      become_user: ubuntu
+      register: kubectl_result
+      
+    - name: Display cluster nodes
+      ansible.builtin.debug:
+        msg: "{{ kubectl_result.stdout }}"
