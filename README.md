@@ -3,6 +3,10 @@
 
 # Kubernetes HA Cluster with Jenkins CI/CD
 
+![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+![Kubernetes](https://img.shields.io/badge/kubernetes-v1.30.1-blue.svg)
+
 🚀 **Automated deployment of a production-ready, highly available Kubernetes cluster using Terraform, Ansible, and Jenkins**
 
 This is based on the work of https://github.com/gmhafiz/k8s-ha. Thank you for your great effort!
