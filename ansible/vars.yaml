@@ -1,15 +1,9 @@
 ---
-# Must unset the hold apt has on the version if you want to change it
+# Kubernetes Configuration
 K8S_VERSION: 1.30.1-1.1
-#K8S_VERSION: 1.29.5-1.1
-#K8S_VERSION: 1.28.10-1.1
-#K8S_VERSION: 1.27.14-1.1
-#K8S_VERSION: 1.26.10-1.1
-#K8S_VERSION: 1.25.15-1.1
-
-# Simply use the default port
 K8S_API_SERVER_PORT: 6443
 
+# Network Configuration
 VIRTUAL_IP: "192.168.122.100"
 VIRTUAL_IP_PORT: 6443
 IP_HOST_LB1: 192.168.122.51
@@ -19,11 +13,23 @@ IP_HOST_CP2: 192.168.122.102
 IP_HOST_CP3: 192.168.122.103
 IP_HOST_W1: 192.168.122.201
 
+# Pod Network Configuration
 POD_CIDR_FLANNEL: 10.244.0.0/16
 POD_CIDR_CALICO: 192.168.0.0/16
 VERSION_CALICO: "v3.26.1"
 
-# Generate random string with: openssl rand -base64 32
+# Authentication
 PASSWORD_KUBEADMIN: "kubeadmin"
 PASSWORD_KEEPALIVED: "fW/19P0JzwNqIveyXfnhLXswVBUSFF4d3oMyVSi3g/U="
 ansible_python_interpreter: /usr/bin/python3
+
+# VM IPs (will be updated by Jenkins)
+vm_ips:
+  kcontrolplane1: "192.168.122.101"
+  kcontrolplane2: "192.168.122.102"
+  kcontrolplane3: "192.168.122.103"
+  kworker1: "192.168.122.201"
+  kworker2: "192.168.122.202"
+  kworker3: "192.168.122.203"
+  loadbalancer1: "192.168.122.51"
+  loadbalancer2: "192.168.122.52"
