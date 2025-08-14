@@ -54,7 +54,7 @@
     - name: Install Calico CNI
       ansible.builtin.shell: |
         kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ VERSION_CALICO }}/manifests/calico.yaml
-      args: { warn: false }
+      #args: { warn: false }
 
 - name: Join additional control plane nodes
   hosts: kcontrolplane2,kcontrolplane3

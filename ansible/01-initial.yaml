@@ -27,12 +27,12 @@
 
     - name: Kill any unattended-upgrade processes
       ansible.builtin.shell: pkill -9 unattended-upgrade || true
-      args: { warn: false }
+      #args: { warn: false }
       ignore_errors: true
 
     - name: Kill any apt/dpkg processes holding locks
       ansible.builtin.shell: pkill -9 apt apt-get dpkg || true
-      args: { warn: false }
+      #args: { warn: false }
       ignore_errors: true
 
     - name: Create kubeadmin user
@@ -42,12 +42,12 @@
         groups: sudo
         createhome: yes
         shell: /bin/bash
-        password: "{{ PASSWORD_KUBEADMIN | password_hash('sha512') }}"
+        #password: "{{ PASSWORD_KUBEADMIN | password_hash('sha512') }}"
 
     - name: Set up authorized keys for kubeadmin user
       ansible.builtin.authorized_key:
         user: kubeadmin
-        key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+        key: "{{ lookup('file', '/root/.ssh/id_ed25519.pub') }}"
 
 - name: Shell QoL on control planes
   hosts: control_plane

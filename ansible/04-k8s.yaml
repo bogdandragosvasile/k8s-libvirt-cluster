@@ -5,7 +5,7 @@
   tasks:
     - name: Disable swap immediately
       ansible.builtin.shell: swapoff -a
-      args: { warn: false }
+      #args: { warn: false }
 
     - name: Disable SWAP in fstab since kubernetes can't work with swap enabled
       ansible.builtin.replace:
@@ -21,7 +21,7 @@
           systemctl stop --now ufw >/dev/null 2>&1
           systemctl disable --now ufw >/dev/null 2>&1
         fi
-      args: { warn: false }
+      #args: { warn: false }
 
     - name: Load kernel modules for containerd
       ansible.builtin.copy:
@@ -40,7 +40,7 @@
 
     - name: Apply kernel modules and parameters
       ansible.builtin.shell: modprobe overlay && modprobe br_netfilter && sysctl --system
-      args: { warn: false }
+      #args: { warn: false }
 
     - name: Create keyrings directory
       ansible.builtin.file:
@@ -51,12 +51,12 @@
     - name: Add Docker GPG key for containerd
       ansible.builtin.shell: |
         curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-      args: { warn: false }
+      #args: { warn: false }
 
     - name: Add Docker repository for containerd
       ansible.builtin.shell: |
         echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
-      args: { warn: false }
+      #args: { warn: false }
 
     - name: Install containerd
       ansible.builtin.apt:
@@ -70,7 +70,7 @@
         mkdir -p /etc/containerd && \
         containerd config default > /etc/containerd/config.toml && \
         sed -i 's/SystemdCgroup \= false/SystemdCgroup \= true/g' /etc/containerd/config.toml
-      args: { warn: false }
+      #args: { warn: false }
 
     - name: Restart containerd service
       ansible.builtin.systemd:
@@ -81,12 +81,12 @@
     - name: Add Kubernetes apt repository
       ansible.builtin.shell: |
         echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ K8S_VERSION | regex_search('(\\d\\.\\d+)') }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
-      args: { warn: false }
+      #args: { warn: false }
 
     - name: Add Kubernetes GPG key
       ansible.builtin.shell: |
         curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ K8S_VERSION | regex_search('(\\d\\.\\d+)') }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      args: { warn: false }
+      #args: { warn: false }
 
     - name: Update apt cache
       ansible.builtin.apt:
@@ -104,7 +104,7 @@
 
     - name: Hold kubelet and kubeadm versions
       ansible.builtin.shell: apt-mark hold kubelet kubeadm
-      args: { warn: false }
+      #args: { warn: false }
 
 - name: Install kubectl on control plane nodes
   hosts: control_plane
@@ -120,4 +120,4 @@
 
     - name: Hold kubectl version
       ansible.builtin.shell: apt-mark hold kubectl
-      args: { warn: false }
+      #args: { warn: false }
