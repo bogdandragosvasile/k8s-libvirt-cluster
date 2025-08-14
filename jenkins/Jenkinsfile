@@ -25,7 +25,7 @@ pipeline {
   environment {
     LIBVIRT_URI         = 'qemu:///system'
     ANSIBLE_INVENTORY   = 'inventory.ini'
-    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')  // public key from /root/.ssh/id_ed25519.pub
+    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')
   }
 
   stages {
@@ -78,8 +78,8 @@ pipeline {
       steps {
         dir('terraform') {
           sh '''
-            terraform plan \
-              -var="kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}" \
+            terraform plan \\
+              -var="kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}" \\
               -out=plan.tfout
           '''
         }
@@ -100,10 +100,20 @@ pipeline {
           sh 'terraform output -json > outputs.json && cat outputs.json'
         }
         sh '''
-          echo "\\033[36m[Build vars.yaml]\\033[0m"
-          echo "---" > ansible/vars.yaml
-          jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
+          echo "\\033[36m[Preserve original vars.yaml and append Terraform outputs]\\033[0m"
+          
+          # Show original vars.yaml
+          echo "Original vars.yaml:"
           cat ansible/vars.yaml
+          
+          # Append Terraform outputs to existing vars.yaml (don't overwrite!)
+          echo "" >> ansible/vars.yaml
+          echo "# Terraform VM outputs:" >> ansible/vars.yaml
+          jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
+          
+          echo "\\033[36m[Final vars.yaml with Terraform outputs:]\\033[0m"
+          cat ansible/vars.yaml
+          
           echo "\\033[36m[Check inventory.ini]\\033[0m"
           ls -l ansible/inventory.ini
         '''
@@ -121,7 +131,7 @@ pipeline {
           for host in $(jq -r '.vm_ips.value | to_entries | map(.value) | .[]' outputs.json); do
             echo "Checking SSH access on $host..."
             for i in $(seq 1 $MAX_RETRIES); do
-              if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+              if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
                 -i /root/.ssh/id_ed25519 -o ConnectTimeout=3 ubuntu@$host 'true' 2>/dev/null; then
                 echo "OK: $host reachable via SSH"
                 break
@@ -143,7 +153,7 @@ pipeline {
         dir('ansible') {
           sh '''
             echo "\\033[36m[Ansible Setup]\\033[0m"
-            ANSIBLE_HOST_KEY_CHECKING=False \
+            ANSIBLE_HOST_KEY_CHECKING=False \\
             ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" -vv
           '''
         }
