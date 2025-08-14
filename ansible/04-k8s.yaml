@@ -4,8 +4,8 @@
   become: true
   vars:
     k8s_version_full: "{{ K8S_VERSION }}"
-    # More robust version extraction using string splitting
-    k8s_series: "{{ K8S_VERSION.split('.')[0] }}.{{ K8S_VERSION.split('.')[1] }}"
+    # Use regex to extract major.minor version more reliably
+    k8s_series: "{{ K8S_VERSION | regex_replace('^(\\d+\\.\\d+).*', '\\1') }}"
   tasks:
     - name: Disable swap immediately
       ansible.builtin.shell: swapoff -a
@@ -75,6 +75,17 @@
         state: restarted
         name: containerd
         enabled: true
+
+    # Remove existing broken Kubernetes repository
+    - name: Remove existing broken Kubernetes repository
+      ansible.builtin.file:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        state: absent
+
+    - name: Remove existing Kubernetes GPG key
+      ansible.builtin.file:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        state: absent
 
     - name: Add Kubernetes GPG key (pkgs.k8s.io)
       ansible.builtin.shell: |
