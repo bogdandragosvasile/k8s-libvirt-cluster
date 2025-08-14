@@ -116,6 +116,7 @@ pipeline {
           
           echo "\\033[36m[Check inventory.ini]\\033[0m"
           ls -l ansible/inventory.ini
+          cat ansible/inventory.ini
         '''
       }
     }
