@@ -45,14 +45,22 @@
         state: directory
         mode: '0755'
 
-    # FIXED: Add timeout and retry logic for Docker GPG key
-    - name: Add Docker GPG key for containerd (with timeout)
+    # ALTERNATIVE APPROACH: Download GPG key to temp file first, then process
+    - name: Download Docker GPG key to temporary file
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /tmp/docker.gpg
+        mode: '0644'
+        timeout: 30
+
+    - name: Process Docker GPG key with gpg
       ansible.builtin.shell: |
-        timeout 60 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-      retries: 3
-      delay: 10
-      register: docker_gpg_result
-      until: docker_gpg_result.rc == 0
+        cat /tmp/docker.gpg | gpg --dearmor > /etc/apt/keyrings/docker.gpg
+
+    - name: Clean up temporary Docker GPG file
+      ansible.builtin.file:
+        path: /tmp/docker.gpg
+        state: absent
 
     - name: Add Docker repository for containerd
       ansible.builtin.shell: |
@@ -77,7 +85,7 @@
         name: containerd
         enabled: true
 
-    # Remove existing broken Kubernetes repository and recreate it properly
+    # Remove existing broken Kubernetes repository
     - name: Remove existing broken Kubernetes repository
       ansible.builtin.file:
         path: /etc/apt/sources.list.d/kubernetes.list
@@ -88,21 +96,26 @@
         path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
         state: absent
 
-    - name: Extract Kubernetes version (reliable method)
-      ansible.builtin.set_fact:
-        k8s_major_minor: "1.30"
+    # ALTERNATIVE APPROACH: Download Kubernetes GPG key to temp file first
+    - name: Download Kubernetes GPG key to temporary file
+      ansible.builtin.get_url:
+        url: https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key
+        dest: /tmp/kubernetes.gpg
+        mode: '0644'
+        timeout: 30
 
-    - name: Add Kubernetes GPG key (pkgs.k8s.io) with timeout
+    - name: Process Kubernetes GPG key with gpg
       ansible.builtin.shell: |
-        timeout 60 curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_major_minor }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-      retries: 3
-      delay: 10
-      register: k8s_gpg_result
-      until: k8s_gpg_result.rc == 0
+        cat /tmp/kubernetes.gpg | gpg --dearmor > /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Clean up temporary Kubernetes GPG file
+      ansible.builtin.file:
+        path: /tmp/kubernetes.gpg
+        state: absent
 
     - name: Add Kubernetes apt repository with correct URL
       ansible.builtin.shell: |
-        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_major_minor }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
 
     - name: Update apt cache
       ansible.builtin.apt:
