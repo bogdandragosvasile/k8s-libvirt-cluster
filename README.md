@@ -568,6 +568,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Red Hat for Ansible
 - Jenkins community for pipeline capabilities
 - Calico project for networking
+- Hafiz Shafruddin for his great and inspiring effort
 
 ***
 
