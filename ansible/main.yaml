@@ -4,6 +4,6 @@
 - import_playbook: 03-lb.yaml
 - import_playbook: 04-k8s.yaml
 - import_playbook: 05-control-plane.yaml
-- import_playbook: 05.5-lb-full-config.yaml  # Add this
+- import_playbook: 05.5-lb-full-config.yaml
 - import_playbook: 06-worker.yaml
 - import_playbook: 07-k8s-config.yaml

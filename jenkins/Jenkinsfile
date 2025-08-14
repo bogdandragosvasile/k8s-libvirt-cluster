@@ -18,7 +18,7 @@ pipeline {
   options {
     ansiColor('xterm')
     timestamps()
-    timeout(time: 60, unit: 'MINUTES')
+    timeout(time: 90, unit: 'MINUTES')  // Increased timeout for worker joins
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }
 
@@ -26,6 +26,8 @@ pipeline {
     LIBVIRT_URI         = 'qemu:///system'
     ANSIBLE_INVENTORY   = 'inventory.ini'
     KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')
+    ANSIBLE_HOST_KEY_CHECKING = 'False'
+    ANSIBLE_STDOUT_CALLBACK = 'yaml'  // Better output formatting
   }
 
   stages {
@@ -152,33 +154,127 @@ pipeline {
     stage('Run Ansible Playbook') {
       steps {
         dir('ansible') {
-          sh '''
-            echo "\\033[36m[Ansible Setup]\\033[0m"
-            ANSIBLE_HOST_KEY_CHECKING=False \\
-            ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars "@vars.yaml" -vv
-          '''
+          script {
+            try {
+              sh '''
+                echo "\\033[36m[Ansible Setup - Enhanced Error Detection]\\033[0m"
+                
+                # Set strict error handling
+                set -euo pipefail
+                
+                # Run playbook with enhanced verbose output and error detection
+                ANSIBLE_HOST_KEY_CHECKING=False \\
+                ANSIBLE_STDOUT_CALLBACK=yaml \\
+                ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml \\
+                  --extra-vars "@vars.yaml" \\
+                  -vvv \\
+                  --diff
+                
+                # Verify the deployment was successful
+                echo "\\033[36m[Post-Deployment Verification]\\033[0m"
+                ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+                  -a "kubectl get nodes" \\
+                  --extra-vars "@vars.yaml" || true
+              '''
+            } catch (Exception e) {
+              echo "\\033[31m[ANSIBLE PLAYBOOK FAILED]\\033[0m"
+              echo "Error: ${e.getMessage()}"
+              
+              // Collect diagnostic information
+              sh '''
+                echo "\\033[33m[Collecting Diagnostic Information]\\033[0m"
+                
+                # Check if any nodes are accessible
+                ansible -i ${ANSIBLE_INVENTORY} all -m ping --extra-vars "@vars.yaml" || true
+                
+                # Check kubelet status on all nodes
+                echo "\\033[33m[Checking kubelet status]\\033[0m"
+                ansible -i ${ANSIBLE_INVENTORY} all -m shell \\
+                  -a "sudo systemctl status kubelet" \\
+                  --extra-vars "@vars.yaml" || true
+                
+                # Check if control plane is working
+                echo "\\033[33m[Checking control plane status]\\033[0m"
+                ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+                  -a "kubectl get nodes" \\
+                  --extra-vars "@vars.yaml" || true
+              '''
+              
+              // Re-throw the exception to fail the build
+              throw e
+            }
+          }
         }
       }
     }
 
-    stage('Verify Cluster') {
+    stage('Verify Cluster Status') {
       steps {
-        echo 'Cluster setup complete — verify with kubectl once kubeconfig is available.'
+        dir('ansible') {
+          sh '''
+            echo "\\033[36m[Final Cluster Verification]\\033[0m"
+            
+            # Get cluster status
+            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+              -a "kubectl get nodes -o wide" \\
+              --extra-vars "@vars.yaml"
+            
+            # Get pod status
+            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+              -a "kubectl get pods --all-namespaces" \\
+              --extra-vars "@vars.yaml"
+            
+            # Check cluster info
+            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+              -a "kubectl cluster-info" \\
+              --extra-vars "@vars.yaml"
+          '''
+        }
       }
     }
   }
 
   post {
     always {
+      script {
+        // Collect logs regardless of success/failure
+        dir('ansible') {
+          sh '''
+            echo "\\033[36m[Collecting Final Logs]\\033[0m"
+            
+            # Show final cluster state
+            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+              -a "kubectl get nodes" \\
+              --extra-vars "@vars.yaml" || echo "Could not get cluster status"
+            
+            echo "Pipeline completed at $(date)"
+          '''
+        }
+      }
       echo 'Pipeline completed.'
     }
+    
+    success {
+      echo '\\033[32m[SUCCESS] Kubernetes cluster deployment completed successfully!\\033[0m'
+    }
+    
     failure {
-      sh '''
-        echo "\\033[33m[Cleanup on Failure]\\033[0m"
-        if [ -x ./scripts/cleanup_vms.sh ]; then
-          ./scripts/cleanup_vms.sh || true
-        fi
-      '''
+      script {
+        echo '\\033[31m[FAILURE] Pipeline failed - collecting diagnostic information\\033[0m'
+        
+        // Enhanced cleanup and diagnostics on failure
+        sh '''
+          echo "\\033[33m[Cleanup on Failure]\\033[0m"
+          
+          # Optional: Uncomment to clean up VMs on failure
+          # if [ -x ./scripts/cleanup_vms.sh ]; then
+          #   ./scripts/cleanup_vms.sh || true
+          # fi
+          
+          # Show what infrastructure exists
+          cd terraform && terraform show || true
+        '''
+      }
     }
   }
 }

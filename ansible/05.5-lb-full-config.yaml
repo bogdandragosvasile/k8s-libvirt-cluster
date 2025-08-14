@@ -2,42 +2,84 @@
 - name: Configure full load balancer after cluster init
   hosts: load_balancer
   become: true
+  vars_files:
+    - vars.yaml
   tasks:
     - name: Update HAProxy with full backend and health checks
       ansible.builtin.copy:
         dest: "/etc/haproxy/haproxy.cfg"
         content: |
-          # Full configuration with health checks
           global
             maxconn 50000
             log /dev/log local0
             user haproxy
             group haproxy
             stats socket /var/lib/haproxy/stats
-          
+            daemon
+
           defaults
             log global
+            mode tcp
             timeout connect 10s
             timeout client 30s
             timeout server 30s
-          
+            retries 3
+
           frontend kubernetes-frontend
-            bind *:6443
+            bind *:{{ K8S_API_SERVER_PORT }}
             mode tcp
             option tcplog
             default_backend kubernetes-backend
-          
+
           backend kubernetes-backend
             option httpchk GET /healthz
             http-check expect status 200
             mode tcp
             option ssl-hello-chk
             balance roundrobin
-            server kcontrolplane1 {{ IP_HOST_CP1 }}:6443 check
-            server kcontrolplane2 {{ IP_HOST_CP2 }}:6443 check
-            server kcontrolplane3 {{ IP_HOST_CP3 }}:6443 check
-    
-    - name: Restart HAProxy with new configuration
+            server kcontrolplane1 {{ IP_HOST_CP1 }}:{{ K8S_API_SERVER_PORT }} check
+            server kcontrolplane2 {{ IP_HOST_CP2 }}:{{ K8S_API_SERVER_PORT }} check
+            server kcontrolplane3 {{ IP_HOST_CP3 }}:{{ K8S_API_SERVER_PORT }} check
+      notify: restart haproxy
+
+    - name: Configure keepalived
+      ansible.builtin.copy:
+        dest: "/etc/keepalived/keepalived.conf"
+        content: |
+          vrrp_script chk_haproxy {
+            script "/bin/curl -f http://localhost:{{ K8S_API_SERVER_PORT }} || exit 1"
+            interval 2
+            weight -2
+            fall 3
+            rise 2
+          }
+
+          vrrp_instance VI_1 {
+            state MASTER
+            interface {{ ansible_default_ipv4.interface }}
+            virtual_router_id 51
+            priority 100
+            advert_int 1
+            authentication {
+              auth_type PASS
+              auth_pass k8s-cluster
+            }
+            virtual_ipaddress {
+              {{ VIRTUAL_IP }}/24
+            }
+            track_script {
+              chk_haproxy
+            }
+          }
+      notify: restart keepalived
+
+  handlers:
+    - name: restart haproxy
       ansible.builtin.systemd:
-        state: restarted
         name: haproxy
+        state: restarted
+
+    - name: restart keepalived
+      ansible.builtin.systemd:
+        name: keepalived
+        state: restarted
