@@ -2,10 +2,6 @@
 - name: Prepare nodes for Kubernetes (swap off, kernel params, containerd, repos)
   hosts: control_plane,workers
   become: true
-  vars:
-    k8s_version_full: "{{ K8S_VERSION }}"
-    # Use regex to extract major.minor version more reliably
-    k8s_series: "{{ K8S_VERSION | regex_replace('^(\\d+\\.\\d+).*', '\\1') }}"
   tasks:
     - name: Disable swap immediately
       ansible.builtin.shell: swapoff -a
@@ -76,7 +72,7 @@
         name: containerd
         enabled: true
 
-    # Remove existing broken Kubernetes repository
+    # CRITICAL: Remove broken Kubernetes repository and recreate it properly
     - name: Remove existing broken Kubernetes repository
       ansible.builtin.file:
         path: /etc/apt/sources.list.d/kubernetes.list
@@ -87,13 +83,25 @@
         path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
         state: absent
 
-    - name: Add Kubernetes GPG key (pkgs.k8s.io)
-      ansible.builtin.shell: |
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_series }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    - name: Extract Kubernetes version (reliable method)
+      ansible.builtin.set_fact:
+        k8s_major_minor: "{{ K8S_VERSION.split('.')[0] }}.{{ K8S_VERSION.split('.')[1] }}"
 
-    - name: Add Kubernetes apt repository
+    - name: Add Kubernetes GPG key (pkgs.k8s.io) with correct version
       ansible.builtin.shell: |
-        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_series }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_major_minor }}/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes apt repository with correct URL
+      ansible.builtin.shell: |
+        echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_major_minor }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+
+    - name: Verify repository URL is correct
+      ansible.builtin.shell: cat /etc/apt/sources.list.d/kubernetes.list
+      register: repo_content
+
+    - name: Display repository content
+      ansible.builtin.debug:
+        msg: "Kubernetes repo: {{ repo_content.stdout }}"
 
     - name: Update apt cache
       ansible.builtin.apt:
@@ -103,8 +111,8 @@
     - name: Install kubelet and kubeadm
       ansible.builtin.apt:
         name:
-          - "kubelet={{ k8s_version_full }}"
-          - "kubeadm={{ k8s_version_full }}"
+          - "kubelet={{ K8S_VERSION }}"
+          - "kubeadm={{ K8S_VERSION }}"
         state: present
         update_cache: yes
         lock_timeout: 1200
@@ -115,12 +123,10 @@
 - name: Install kubectl on control plane nodes
   hosts: control_plane
   become: true
-  vars:
-    k8s_version_full: "{{ K8S_VERSION }}"
   tasks:
     - name: Install kubectl
       ansible.builtin.apt:
-        name: "kubectl={{ k8s_version_full }}"
+        name: "kubectl={{ K8S_VERSION }}"
         state: present
         update_cache: yes
         lock_timeout: 1200
