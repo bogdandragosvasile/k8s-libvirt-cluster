@@ -1,9 +1,4 @@
-<img src="https://upload.wikimedia.org/wikipedia/commons/d/da/Libvirt_logo.svg" style="height:64px;margin-right:32px"/>
-<img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Kubernetes_logo_without_workmark.svg/500px-Kubernetes_logo_without_workmark.svg.png" style="height:64px;margin-right:32px"/>
-<img src="https://www.aviator.co/blog/wp-content/uploads/2023/01/terraform.png" style="height:64px;margin-right:32px"/>
-<img src="https://icon2.cleanpng.com/20180917/gvp/kisspng-starmetro-logo-product-content-computer-icons-5ba0580ea74853.5621064615372349586852.jpg" style="height:64px;margin-right:32px"/>
-<img src="https://upload.wikimedia.org/wikipedia/commons/a/ab/Haproxy-logo.png" style="height:64px;margin-right:32px"/>
-<img src="https://docs.convisoappsec.com/assets/images/jenkins-84750961bdf8ae419d123600b64026da.png" style="height:64px;margin-right:32px"/>
+<img src="https://upload.wikimedia.org/wikipedia/commons/d/da/Libvirt_logo.svg" style="height:64px;margin-right:32px"/><img src="https://upload.wikimedia.org/wikipedia/commons/thumb/3/39/Kubernetes_logo_without_workmark.svg/500px-Kubernetes_logo_without_workmark.svg.png" style="height:64px;margin-right:32px"/><img src="https://www.aviator.co/blog/wp-content/uploads/2023/01/terraform.png" style="height:64px;margin-right:32px"/><img src="https://icon2.cleanpng.com/20180917/gvp/kisspng-starmetro-logo-product-content-computer-icons-5ba0580ea74853.5621064615372349586852.jpg" style="height:64px;margin-right:32px"/><img src="https://upload.wikimedia.org/wikipedia/commons/a/ab/Haproxy-logo.png" style="height:64px;margin-right:32px"/><img src="https://docs.convisoappsec.com/assets/images/jenkins-84750961bdf8ae419d123600b64026da.png" style="height:64px;margin-right:32px"/>
 
 
 # Kubernetes HA Cluster with Jenkins CI/CD
