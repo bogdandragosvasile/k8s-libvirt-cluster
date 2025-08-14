@@ -1,24 +1,34 @@
 ---
-- name: Configure load balancer nodes
+- name: Configure Load Balancer (Bootstrap Configuration)
   hosts: load_balancer
   become: true
+  vars_files:
+    - vars.yaml
   tasks:
-    - name: Create check_apiserver script
-      ansible.builtin.copy:
-        dest: "/etc/keepalived/check_apiserver.sh"
-        mode: '0755'
-        content: |
-          #!/bin/sh
-          errorExit() {
-            echo "*** $*" 1>&2
-            exit 1
-          }
-          curl --silent --max-time 2 --insecure https://localhost:{{ K8S_API_SERVER_PORT }}/ -o /dev/null || errorExit "Error GET https://localhost:{{ K8S_API_SERVER_PORT }}/"
-          if ip addr | grep -q {{ VIRTUAL_IP }}; then
-            curl --silent --max-time 2 --insecure https://{{ VIRTUAL_IP }}:{{ K8S_API_SERVER_PORT }}/ -o /dev/null || errorExit "Error GET https://{{ VIRTUAL_IP }}:{{ K8S_API_SERVER_PORT }}/"
-          fi
+    - name: Install HAProxy
+      ansible.builtin.apt:
+        name: haproxy
+        state: present
+        update_cache: true
 
-    - name: Configure HAProxy
+    - name: Install keepalived
+      ansible.builtin.apt:
+        name: keepalived
+        state: present
+
+    - name: Enable and start HAProxy
+      ansible.builtin.systemd:
+        name: haproxy
+        enabled: true
+        state: started
+
+    - name: Enable and start keepalived
+      ansible.builtin.systemd:
+        name: keepalived
+        enabled: true
+        state: started
+
+    - name: Configure HAProxy (Bootstrap mode - no health checks)
       ansible.builtin.copy:
         dest: "/etc/haproxy/haproxy.cfg"
         content: |
@@ -28,105 +38,91 @@
             user haproxy
             group haproxy
             stats socket /var/lib/haproxy/stats
+            daemon
+
           defaults
             log global
+            mode tcp
             timeout connect 10s
             timeout client 30s
             timeout server 30s
+            retries 3
+
           frontend kubernetes-frontend
-            bind *:6443
+            bind *:{{ K8S_API_SERVER_PORT }}
             mode tcp
             option tcplog
             default_backend kubernetes-backend
-          backend kubernetes-backend
-            option httpchk GET /healthz
-            http-check expect status 200
-            mode tcp
-            option ssl-hello-chk
-            balance roundrobin
-            server kcontrolplane1 {{ IP_HOST_CP1 }}:6443 check
-            server kcontrolplane2 {{ IP_HOST_CP2 }}:6443 check
-            server kcontrolplane3 {{ IP_HOST_CP3 }}:6443 check
 
-- name: Configure keepalived on lb1 (MASTER)
-  hosts: loadbalancer1
-  become: true
-  tasks:
-    - name: Configure keepalived as MASTER
+          backend kubernetes-backend
+            mode tcp
+            balance roundrobin
+            # Bootstrap configuration - only first control plane, no health checks
+            server kcontrolplane1 {{ IP_HOST_CP1 }}:{{ K8S_API_SERVER_PORT }}
+            # Additional control planes will be added after cluster initialization
+      notify: restart haproxy
+
+    - name: Configure keepalived
       ansible.builtin.copy:
         dest: "/etc/keepalived/keepalived.conf"
         content: |
-          vrrp_script check_apiserver {
-            script "/etc/keepalived/check_apiserver.sh"
-            interval 3
-            timeout 10
-            fall 5
-            rise 2
+          vrrp_script chk_haproxy {
+            script "/bin/curl -f http://localhost:{{ K8S_API_SERVER_PORT }} || exit 1"
+            interval 2
             weight -2
+            fall 3
+            rise 2
           }
+
           vrrp_instance VI_1 {
             state MASTER
             interface {{ ansible_default_ipv4.interface }}
-            virtual_router_id 1
-            priority 101
-            advert_int 5
-            authentication {
-              auth_type PASS
-              auth_pass {{ PASSWORD_KEEPALIVED }}
-            }
-            virtual_ipaddress {
-              {{ VIRTUAL_IP }}
-            }
-            track_script {
-              check_apiserver
-            }
-          }
-
-- name: Configure keepalived on lb2 (BACKUP)
-  hosts: loadbalancer2
-  become: true
-  tasks:
-    - name: Configure keepalived as BACKUP
-      ansible.builtin.copy:
-        dest: "/etc/keepalived/keepalived.conf"
-        content: |
-          vrrp_script check_apiserver {
-            script "/etc/keepalived/check_apiserver.sh"
-            interval 3
-            timeout 10
-            fall 5
-            rise 2
-            weight 2
-          }
-          vrrp_instance VI_1 {
-            state BACKUP
-            interface {{ ansible_default_ipv4.interface }}
-            virtual_router_id 1
+            virtual_router_id 51
             priority 100
-            advert_int 5
+            advert_int 1
             authentication {
               auth_type PASS
-              auth_pass {{ PASSWORD_KEEPALIVED }}
+              auth_pass k8s-cluster
             }
             virtual_ipaddress {
-              {{ VIRTUAL_IP }}
+              {{ VIRTUAL_IP }}/24
             }
             track_script {
-              check_apiserver
+              chk_haproxy
             }
           }
+      notify: restart keepalived
 
-- name: Enable HA services
-  hosts: load_balancer
-  become: true
-  tasks:
-    - name: Start and enable keepalived
+    - name: Enable IP forwarding
+      ansible.posix.sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        state: present
+        sysctl_set: true
+
+    - name: Configure rsyslog for HAProxy
+      ansible.builtin.copy:
+        dest: "/etc/rsyslog.d/49-haproxy.conf"
+        content: |
+          $ModLoad imudp
+          $UDPServerRun 514
+          $UDPServerAddress 127.0.0.1
+          local0.*    /var/log/haproxy.log
+          & stop
+      notify: restart rsyslog
+
+  handlers:
+    - name: restart haproxy
       ansible.builtin.systemd:
-        state: restarted
-        name: keepalived
-        enabled: true
-    - name: Start and enable haproxy
-      ansible.builtin.systemd:
-        state: restarted
         name: haproxy
-        enabled: true
+        state: restarted
+
+    - name: restart keepalived
+      ansible.builtin.systemd:
+        name: keepalived
+        state: restarted
+
+    - name: restart rsyslog
+      ansible.builtin.systemd:
+        name: rsyslog
+        state: restarted
