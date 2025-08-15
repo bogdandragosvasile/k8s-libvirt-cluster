@@ -1,214 +1,214 @@
-name: Deploy Kubernetes HA Cluster
+# name: Deploy Kubernetes HA Cluster
 
-on:
-  push:
-    branches: [ master ]
-  pull_request:
-    branches: [ master ]
-  workflow_dispatch:  # Allow manual triggering
+# on:
+#   push:
+#     branches: [ master ]
+#   pull_request:
+#     branches: [ master ]
+#   workflow_dispatch:  # Allow manual triggering
 
-env:
-  LIBVIRT_URI: 'qemu:///system'
-  ANSIBLE_INVENTORY: 'inventory.ini'
-  ANSIBLE_HOST_KEY_CHECKING: 'False'
-  ANSIBLE_STDOUT_CALLBACK: 'yaml'
+# env:
+#   LIBVIRT_URI: 'qemu:///system'
+#   ANSIBLE_INVENTORY: 'inventory.ini'
+#   ANSIBLE_HOST_KEY_CHECKING: 'False'
+#   ANSIBLE_STDOUT_CALLBACK: 'yaml'
 
-jobs:
-  deploy-k8s-cluster:
-    runs-on: self-hosted  # Required for KVM/libvirt access
-    container:
-      image: bogdandragos/jenkins-k8s-libvirt-agent:latest
-      options: >-
-        --user 0
-        --privileged
-        --network host
-        -v /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
-        -v /run/libvirt:/run/libvirt
-        -v /var/lib/libvirt/images:/var/lib/libvirt/images
-        -v /tmp/.X11-unix:/tmp/.X11-unix:rw
-      env:
-        DISPLAY: :0
+# jobs:
+#   deploy-k8s-cluster:
+#     runs-on: self-hosted  # Required for KVM/libvirt access
+#     container:
+#       image: bogdandragos/jenkins-k8s-libvirt-agent:latest
+#       options: >-
+#         --user 0
+#         --privileged
+#         --network host
+#         -v /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
+#         -v /run/libvirt:/run/libvirt
+#         -v /var/lib/libvirt/images:/var/lib/libvirt/images
+#         -v /tmp/.X11-unix:/tmp/.X11-unix:rw
+#       env:
+#         DISPLAY: :0
 
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
+#     steps:
+#     - name: Checkout repository
+#       uses: actions/checkout@v4
 
-    - name: Setup SSH keys
-      run: |
-        mkdir -p /root/.ssh
-        echo "${{ secrets.KUBE_SSH_PRIVATE_KEY }}" > /root/.ssh/id_ed25519
-        echo "${{ secrets.KUBE_SSH_PUBLIC_KEY }}" > /root/.ssh/id_ed25519.pub
-        chmod 600 /root/.ssh/id_ed25519
-        chmod 644 /root/.ssh/id_ed25519.pub
-        ssh-keyscan -H github.com >> /root/.ssh/known_hosts
+#     - name: Setup SSH keys
+#       run: |
+#         mkdir -p /root/.ssh
+#         echo "${{ secrets.KUBE_SSH_PRIVATE_KEY }}" > /root/.ssh/id_ed25519
+#         echo "${{ secrets.KUBE_SSH_PUBLIC_KEY }}" > /root/.ssh/id_ed25519.pub
+#         chmod 600 /root/.ssh/id_ed25519
+#         chmod 644 /root/.ssh/id_ed25519.pub
+#         ssh-keyscan -H github.com >> /root/.ssh/known_hosts
 
-    - name: Prepare Base Image
-      run: |
-        echo "🔄 [Prepare Base Image]"
-        BASE_IMAGE_PATH="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
-        BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
-        if [ ! -f "$BASE_IMAGE_PATH" ]; then
-          echo "Downloading base image..."
-          wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE_PATH" --progress=dot:giga
-        else
-          echo "Base image already exists - skipping download."
-        fi
-        chmod 666 "$BASE_IMAGE_PATH" || true
-        chown 107:107 "$BASE_IMAGE_PATH" || true
+#     - name: Prepare Base Image
+#       run: |
+#         echo "🔄 [Prepare Base Image]"
+#         BASE_IMAGE_PATH="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
+#         BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+#         if [ ! -f "$BASE_IMAGE_PATH" ]; then
+#           echo "Downloading base image..."
+#           wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE_PATH" --progress=dot:giga
+#         else
+#           echo "Base image already exists - skipping download."
+#         fi
+#         chmod 666 "$BASE_IMAGE_PATH" || true
+#         chown 107:107 "$BASE_IMAGE_PATH" || true
 
-    - name: Setup Libvirt Pool
-      run: |
-        echo "🔄 [Setup Libvirt Pool]"
-        virsh pool-define-as default dir --target /var/lib/libvirt/images || true
-        virsh pool-start default || true
-        virsh pool-autostart default || true
+#     - name: Setup Libvirt Pool
+#       run: |
+#         echo "🔄 [Setup Libvirt Pool]"
+#         virsh pool-define-as default dir --target /var/lib/libvirt/images || true
+#         virsh pool-start default || true
+#         virsh pool-autostart default || true
 
-    - name: Terraform Init
-      working-directory: ./terraform
-      run: |
-        echo "🔄 [Terraform Init]"
-        terraform init
+#     - name: Terraform Init
+#       working-directory: ./terraform
+#       run: |
+#         echo "🔄 [Terraform Init]"
+#         terraform init
 
-    - name: Terraform Plan
-      working-directory: ./terraform
-      run: |
-        echo "🔄 [Terraform Plan]"
-        terraform plan \
-          -var="kube_ssh_public_key=${{ secrets.KUBE_SSH_PUBLIC_KEY }}" \
-          -out=plan.tfout
+#     - name: Terraform Plan
+#       working-directory: ./terraform
+#       run: |
+#         echo "🔄 [Terraform Plan]"
+#         terraform plan \
+#           -var="kube_ssh_public_key=${{ secrets.KUBE_SSH_PUBLIC_KEY }}" \
+#           -out=plan.tfout
 
-    - name: Terraform Apply
-      working-directory: ./terraform
-      run: |
-        echo "🔄 [Terraform Apply]"
-        terraform apply -auto-approve plan.tfout
+#     - name: Terraform Apply
+#       working-directory: ./terraform
+#       run: |
+#         echo "🔄 [Terraform Apply]"
+#         terraform apply -auto-approve plan.tfout
 
-    - name: Generate Ansible Inventory
-      run: |
-        echo "🔄 [Generate Ansible Inventory]"
-        cd terraform
-        terraform output -json > outputs.json && cat outputs.json
+#     - name: Generate Ansible Inventory
+#       run: |
+#         echo "🔄 [Generate Ansible Inventory]"
+#         cd terraform
+#         terraform output -json > outputs.json && cat outputs.json
         
-        echo "Preserve original vars.yaml and append Terraform outputs"
-        echo "Original vars.yaml:"
-        cat ansible/vars.yaml
+#         echo "Preserve original vars.yaml and append Terraform outputs"
+#         echo "Original vars.yaml:"
+#         cat ansible/vars.yaml
         
-        # Append Terraform outputs to existing vars.yaml
-        echo "" >> ansible/vars.yaml
-        echo "# Terraform VM outputs:" >> ansible/vars.yaml
-        jq -r 'to_entries | map("\(.key): \(.value.value)") | join("\n")' terraform/outputs.json >> ansible/vars.yaml
+#         # Append Terraform outputs to existing vars.yaml
+#         echo "" >> ansible/vars.yaml
+#         echo "# Terraform VM outputs:" >> ansible/vars.yaml
+#         jq -r 'to_entries | map("\(.key): \(.value.value)") | join("\n")' terraform/outputs.json >> ansible/vars.yaml
         
-        echo "Final vars.yaml with Terraform outputs:"
-        cat ansible/vars.yaml
+#         echo "Final vars.yaml with Terraform outputs:"
+#         cat ansible/vars.yaml
         
-        echo "Check inventory.ini:"
-        ls -l ansible/inventory.ini
-        cat ansible/inventory.ini
+#         echo "Check inventory.ini:"
+#         ls -l ansible/inventory.ini
+#         cat ansible/inventory.ini
 
-    - name: Wait for VMs to be Reachable via SSH
-      run: |
-        echo "🔄 [Wait for VMs over SSH]"
-        MAX_RETRIES=60
-        SLEEP_TIME=10
-        cd terraform
+#     - name: Wait for VMs to be Reachable via SSH
+#       run: |
+#         echo "🔄 [Wait for VMs over SSH]"
+#         MAX_RETRIES=60
+#         SLEEP_TIME=10
+#         cd terraform
 
-        for host in $(jq -r '.vm_ips.value | to_entries | map(.value) | .[]' outputs.json); do
-          echo "Checking SSH access on $host..."
-          for i in $(seq 1 $MAX_RETRIES); do
-            if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-              -i /root/.ssh/id_ed25519 -o ConnectTimeout=3 ubuntu@$host 'true' 2>/dev/null; then
-              echo "✅ OK: $host reachable via SSH"
-              break
-            fi
-            echo "⏳ Waiting for $host... ($i/$MAX_RETRIES)"
-            sleep $SLEEP_TIME
-          done
-          if [ $i -eq $MAX_RETRIES ]; then
-            echo "❌ ERROR: $host not reachable via SSH"
-            exit 1
-          fi
-        done
+#         for host in $(jq -r '.vm_ips.value | to_entries | map(.value) | .[]' outputs.json); do
+#           echo "Checking SSH access on $host..."
+#           for i in $(seq 1 $MAX_RETRIES); do
+#             if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+#               -i /root/.ssh/id_ed25519 -o ConnectTimeout=3 ubuntu@$host 'true' 2>/dev/null; then
+#               echo "✅ OK: $host reachable via SSH"
+#               break
+#             fi
+#             echo "⏳ Waiting for $host... ($i/$MAX_RETRIES)"
+#             sleep $SLEEP_TIME
+#           done
+#           if [ $i -eq $MAX_RETRIES ]; then
+#             echo "❌ ERROR: $host not reachable via SSH"
+#             exit 1
+#           fi
+#         done
 
-    - name: Run Ansible Playbook
-      working-directory: ./ansible
-      run: |
-        set -euo pipefail
-        echo "🔄 [Ansible Setup - Enhanced Error Detection]"
+#     - name: Run Ansible Playbook
+#       working-directory: ./ansible
+#       run: |
+#         set -euo pipefail
+#         echo "🔄 [Ansible Setup - Enhanced Error Detection]"
         
-        # Run playbook with enhanced verbose output and error detection
-        ANSIBLE_HOST_KEY_CHECKING=False \
-        ANSIBLE_STDOUT_CALLBACK=yaml \
-        ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml \
-          --extra-vars "@vars.yaml" \
-          -vvv \
-          --diff
+#         # Run playbook with enhanced verbose output and error detection
+#         ANSIBLE_HOST_KEY_CHECKING=False \
+#         ANSIBLE_STDOUT_CALLBACK=yaml \
+#         ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml \
+#           --extra-vars "@vars.yaml" \
+#           -vvv \
+#           --diff
         
-        # Verify the deployment was successful
-        echo "🔄 [Post-Deployment Verification]"
-        ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
-          -a "kubectl get nodes" \
-          --extra-vars "@vars.yaml" || true
+#         # Verify the deployment was successful
+#         echo "🔄 [Post-Deployment Verification]"
+#         ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
+#           -a "kubectl get nodes" \
+#           --extra-vars "@vars.yaml" || true
 
-    - name: Verify Cluster Status
-      working-directory: ./ansible
-      run: |
-        echo "🔄 [Final Cluster Verification]"
+#     - name: Verify Cluster Status
+#       working-directory: ./ansible
+#       run: |
+#         echo "🔄 [Final Cluster Verification]"
         
-        # Get cluster status
-        ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
-          -a "kubectl get nodes -o wide" \
-          --extra-vars "@vars.yaml"
+#         # Get cluster status
+#         ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
+#           -a "kubectl get nodes -o wide" \
+#           --extra-vars "@vars.yaml"
         
-        # Get pod status
-        ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
-          -a "kubectl get pods --all-namespaces" \
-          --extra-vars "@vars.yaml"
+#         # Get pod status
+#         ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
+#           -a "kubectl get pods --all-namespaces" \
+#           --extra-vars "@vars.yaml"
         
-        # Check cluster info
-        ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
-          -a "kubectl cluster-info" \
-          --extra-vars "@vars.yaml"
+#         # Check cluster info
+#         ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
+#           -a "kubectl cluster-info" \
+#           --extra-vars "@vars.yaml"
 
-    - name: Collect Final Logs
-      if: always()
-      working-directory: ./ansible
-      run: |
-        echo "🔄 [Collecting Final Logs]"
+#     - name: Collect Final Logs
+#       if: always()
+#       working-directory: ./ansible
+#       run: |
+#         echo "🔄 [Collecting Final Logs]"
         
-        # Show final cluster state
-        ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
-          -a "kubectl get nodes" \
-          --extra-vars "@vars.yaml" || echo "Could not get cluster status"
+#         # Show final cluster state
+#         ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \
+#           -a "kubectl get nodes" \
+#           --extra-vars "@vars.yaml" || echo "Could not get cluster status"
         
-        echo "Pipeline completed at $(date)"
+#         echo "Pipeline completed at $(date)"
 
-    - name: Cleanup on Failure
-      if: failure()
-      run: |
-        echo "🧹 [Cleanup on Failure]"
+#     - name: Cleanup on Failure
+#       if: failure()
+#       run: |
+#         echo "🧹 [Cleanup on Failure]"
         
-        # Optional: Uncomment to clean up VMs on failure
-        # if [ -x ./scripts/cleanup_vms.sh ]; then
-        #   ./scripts/cleanup_vms.sh || true
-        # fi
+#         # Optional: Uncomment to clean up VMs on failure
+#         # if [ -x ./scripts/cleanup_vms.sh ]; then
+#         #   ./scripts/cleanup_vms.sh || true
+#         # fi
         
-        # Show what infrastructure exists
-        cd terraform && terraform show || true
+#         # Show what infrastructure exists
+#         cd terraform && terraform show || true
 
-  notify-success:
-    needs: deploy-k8s-cluster
-    runs-on: ubuntu-latest
-    if: success()
-    steps:
-    - name: Success Notification
-      run: |
-        echo "🎉 SUCCESS: Kubernetes cluster deployment completed successfully!"
+#   notify-success:
+#     needs: deploy-k8s-cluster
+#     runs-on: ubuntu-latest
+#     if: success()
+#     steps:
+#     - name: Success Notification
+#       run: |
+#         echo "🎉 SUCCESS: Kubernetes cluster deployment completed successfully!"
 
-  notify-failure:
-    needs: deploy-k8s-cluster
-    runs-on: ubuntu-latest
-    if: failure()
-    steps:
-    - name: Failure Notification
-      run: |
-        echo "❌ FAILURE: Pipeline failed - check logs for diagnostic information"
+#   notify-failure:
+#     needs: deploy-k8s-cluster
+#     runs-on: ubuntu-latest
+#     if: failure()
+#     steps:
+#     - name: Failure Notification
+#       run: |
+#         echo "❌ FAILURE: Pipeline failed - check logs for diagnostic information"

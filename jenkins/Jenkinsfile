@@ -15,10 +15,16 @@ pipeline {
     }
   }
 
+  parameters {
+    booleanParam(name: 'SKIP_TERRAFORM', defaultValue: true, description: 'Skip Terraform stages')
+    booleanParam(name: 'SKIP_ANSIBLE', defaultValue: true, description: 'Skip Ansible stages') 
+    booleanParam(name: 'INSTALL_METALLB', defaultValue: true, description: 'Install MetalLB')
+  }
+
   options {
     ansiColor('xterm')
     timestamps()
-    timeout(time: 90, unit: 'MINUTES')  // Increased timeout for worker joins
+    timeout(time: 90, unit: 'MINUTES')
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }
 
@@ -27,11 +33,12 @@ pipeline {
     ANSIBLE_INVENTORY   = 'inventory.ini'
     KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')
     ANSIBLE_HOST_KEY_CHECKING = 'False'
-    ANSIBLE_STDOUT_CALLBACK = 'yaml'  // Better output formatting
+    ANSIBLE_STDOUT_CALLBACK = 'yaml'
   }
 
   stages {
     stage('Prepare Base Image') {
+      when { expression { !params.SKIP_TERRAFORM } }
       steps {
         sh '''
           echo "\\033[36m[Prepare Base Image]\\033[0m"
@@ -50,6 +57,7 @@ pipeline {
     }
 
     stage('Setup Libvirt Pool') {
+      when { expression { !params.SKIP_TERRAFORM } }
       steps {
         sh '''
           echo "\\033[36m[Setup Libvirt Pool]\\033[0m"
@@ -69,6 +77,7 @@ pipeline {
     }
 
     stage('Terraform Init') {
+      when { expression { !params.SKIP_TERRAFORM } }
       steps {
         dir('terraform') {
           sh 'terraform init'
@@ -77,6 +86,7 @@ pipeline {
     }
 
     stage('Terraform Plan') {
+      when { expression { !params.SKIP_TERRAFORM } }
       steps {
         dir('terraform') {
           sh '''
@@ -89,6 +99,7 @@ pipeline {
     }
 
     stage('Terraform Apply') {
+      when { expression { !params.SKIP_TERRAFORM } }
       steps {
         dir('terraform') {
           sh 'terraform apply -auto-approve plan.tfout'
@@ -97,6 +108,7 @@ pipeline {
     }
 
     stage('Generate Ansible Inventory') {
+      when { expression { !params.SKIP_TERRAFORM } }
       steps {
         dir('terraform') {
           sh 'terraform output -json > outputs.json && cat outputs.json'
@@ -124,6 +136,7 @@ pipeline {
     }
 
     stage('Wait for VMs to be Reachable via SSH') {
+      when { expression { !params.SKIP_ANSIBLE } }
       steps {
         sh '''
           echo "\\033[36m[Wait for VMs over SSH]\\033[0m"
@@ -152,6 +165,7 @@ pipeline {
     }
 
     stage('Run Ansible Playbook') {
+      when { expression { !params.SKIP_ANSIBLE } }
       steps {
         dir('ansible') {
           script {
@@ -209,6 +223,7 @@ pipeline {
     }
 
     stage('Verify Cluster Status') {
+      when { expression { !params.SKIP_ANSIBLE } }
       steps {
         dir('ansible') {
           sh '''
@@ -228,6 +243,67 @@ pipeline {
             ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
               -a "kubectl cluster-info" \\
               --extra-vars "@vars.yaml"
+          '''
+        }
+      }
+    }
+
+    stage('Install MetalLB') {
+      when { expression { params.INSTALL_METALLB } }
+      steps {
+        script {
+          sh '''
+            echo "\\033[36m[Installing and configuring MetalLB]\\033[0m"
+            
+            # Get control plane IP
+            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+            echo "Control plane IP: $CONTROL_PLANE_IP"
+            
+            # Test SSH connection
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "echo 'SSH connection successful'"
+            
+            # Copy the MetalLB installation script
+            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-metallb.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+            
+            # Make it executable and run it
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+              "chmod +x /tmp/install-metallb.sh && /tmp/install-metallb.sh"
+            
+            echo "🎉 MetalLB installation completed successfully!"
+          '''
+        }
+      }
+    }
+
+
+
+
+
+
+    stage('Final Cluster Summary') {
+      steps {
+        script {
+          sh '''
+            echo "=================================="
+            echo "🎉 KUBERNETES CLUSTER SUMMARY"
+            echo "=================================="
+            
+            # Get control plane IP
+            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+            
+            echo "📊 CLUSTER STATUS:"
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get nodes -o wide"
+            
+            echo "🚀 SYSTEM PODS:"
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n kube-system"
+            
+            echo "⚖️ METALLB STATUS:"
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n metallb-system" || echo "MetalLB not installed"
+            
+            echo "🌐 SERVICES WITH EXTERNAL IPs:"
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get svc --all-namespaces -o wide | grep -E 'LoadBalancer|EXTERNAL-IP'" || echo "No LoadBalancer services found"
+            
+            echo "✅ Your Kubernetes cluster is ready!"
           '''
         }
       }
