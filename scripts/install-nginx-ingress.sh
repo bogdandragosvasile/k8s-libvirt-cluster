@@ -10,12 +10,11 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}[Installing Nginx Ingress Controller with MetalLB]${NC}"
 
-# Configuration
-INGRESS_IP="192.168.122.241"
+# Configuration - Use IP outside existing range
+INGRESS_IP="192.168.122.230"  # Changed from .241 to .230
 METALLB_NAMESPACE="metallb-system"
 
 echo -e "${YELLOW}Installing Nginx Ingress Controller...${NC}"
-# Install Nginx Ingress Controller (baremetal version)
 kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/baremetal/deploy.yaml
 
 echo -e "${YELLOW}Waiting for ingress controller deployment...${NC}"
@@ -25,7 +24,6 @@ kubectl wait --namespace ingress-nginx \
   --timeout=300s
 
 echo -e "${YELLOW}Patching ingress controller to use LoadBalancer...${NC}"
-# Patch the service to use LoadBalancer instead of NodePort
 kubectl patch svc ingress-nginx-controller -n ingress-nginx -p '{"spec":{"type":"LoadBalancer"}}'
 
 echo -e "${YELLOW}Creating dedicated MetalLB IP pool for ingress...${NC}"
@@ -50,8 +48,11 @@ spec:
   - ingress-pool
 EOF
 
+# Force assignment of specific IP to ingress controller
+echo -e "${YELLOW}Assigning specific IP to ingress controller...${NC}"
+kubectl annotate svc ingress-nginx-controller -n ingress-nginx metallb.universe.tf/address-pool=ingress-pool --overwrite
+
 echo -e "${YELLOW}Waiting for external IP assignment...${NC}"
-# Wait for external IP assignment
 for i in {1..20}; do
     EXTERNAL_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo '')
     if [[ -n "$EXTERNAL_IP" && "$EXTERNAL_IP" != "null" ]]; then
@@ -63,14 +64,12 @@ for i in {1..20}; do
 done
 
 echo -e "${YELLOW}Verifying ingress installation...${NC}"
-# Verify installation
 kubectl get pods -n ingress-nginx
 kubectl get svc -n ingress-nginx
 kubectl get ipaddresspool -n metallb-system
 kubectl get l2advertisement -n metallb-system
 
 echo -e "${YELLOW}Creating test ingress resource...${NC}"
-# Create a test ingress resource
 cat <<EOF | kubectl apply -f -
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -95,4 +94,4 @@ EOF
 
 echo -e "${GREEN}🎉 Nginx Ingress Controller installation and configuration complete!${NC}"
 echo -e "${BLUE}Ingress Controller IP: ${EXTERNAL_IP}${NC}"
-echo -e "${BLUE}You can now access services via: http://test.k8s.local (add to /etc/hosts: ${EXTERNAL_IP} test.k8s.local)${NC}"
+echo -e "${BLUE}You can test with: curl -H \"Host: test.k8s.local\" http://${EXTERNAL_IP}${NC}"
