@@ -1,0 +1,18 @@
+# Update MetalLB to assign specific IP for ingress
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: ingress-pool
+  namespace: metallb-system
+spec:
+  addresses:
+  - 192.168.122.241-192.168.122.241  # Dedicated IP for ingress
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: ingress-l2advertisement
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+  - ingress-pool

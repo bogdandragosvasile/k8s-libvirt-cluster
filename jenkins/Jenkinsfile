@@ -19,6 +19,7 @@ pipeline {
     booleanParam(name: 'SKIP_TERRAFORM', defaultValue: true, description: 'Skip Terraform stages')
     booleanParam(name: 'SKIP_ANSIBLE', defaultValue: true, description: 'Skip Ansible stages') 
     booleanParam(name: 'INSTALL_METALLB', defaultValue: true, description: 'Install MetalLB')
+    booleanParam(name: 'INSTALL_INGRESS', defaultValue: true, description: 'Install Nginx Ingress Controller with MetalLB integration')
   }
 
   options {
@@ -276,6 +277,29 @@ pipeline {
     }
 
 
+    stage('Install Nginx Ingress Controller') {
+      when { expression { params.INSTALL_INGRESS } }
+      steps {
+        script {
+          sh '''
+            echo "\\033[36m[Installing Nginx Ingress Controller]\\033[0m"
+            
+            # Get control plane IP
+            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+            echo "Control plane IP: $CONTROL_PLANE_IP"
+            
+            # Copy the ingress installation script
+            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-nginx-ingress.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+            
+            # Make it executable and run it
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+              "chmod +x /tmp/install-nginx-ingress.sh && /tmp/install-nginx-ingress.sh"
+            
+            echo "🎉 Nginx Ingress Controller installation completed successfully!"
+          '''
+        }
+      }
+    }
 
 
 
