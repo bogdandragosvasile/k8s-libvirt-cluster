@@ -1,24 +1,72 @@
 ---
+# =============================================================================
+# Package Installation for All Distributions
+# =============================================================================
+
 - name: Install base packages on all nodes
   hosts: all
   become: true
+  vars_files:
+    - vars.yaml
+  
   tasks:
-    - name: Install essential tools
+    - name: Install essential tools (Debian/Ubuntu)
       ansible.builtin.apt:
         name:
           - apt-transport-https
           - gpg
           - curl
           - ca-certificates
+          - software-properties-common
         state: present
         update_cache: yes
         lock_timeout: 1200
+      when: distro_config.family == "debian"
+
+    - name: Install essential tools (RHEL/CentOS/Rocky with DNF)
+      ansible.builtin.dnf:
+        name:
+          - curl
+          - ca-certificates
+          - gnupg2
+          - dnf-plugins-core
+        state: present
+        update_cache: yes
+      when: distro_config.family == "rhel" and distro_config.package_manager == "dnf"
+
+    - name: Install essential tools (RHEL/CentOS with YUM)
+      ansible.builtin.yum:
+        name:
+          - curl
+          - ca-certificates
+          - gnupg2
+          - yum-utils
+        state: present
+        update_cache: yes
+      when: distro_config.family == "rhel" and distro_config.package_manager == "yum"
+
+    - name: Install essential tools (openSUSE)
+      ansible.builtin.zypper:
+        name:
+          - curl
+          - ca-certificates
+          - gnupg2
+        state: present
+        update_cache: yes
+      when: distro_config.family == "suse"
+
+# =============================================================================
+# Load Balancer Packages
+# =============================================================================
 
 - name: Install HA packages on load balancers
   hosts: load_balancer
   become: true
+  vars_files:
+    - vars.yaml
+  
   tasks:
-    - name: Install keepalived and haproxy
+    - name: Install keepalived and haproxy (Debian/Ubuntu)
       ansible.builtin.apt:
         name:
           - keepalived
@@ -26,3 +74,31 @@
         state: present
         update_cache: yes
         lock_timeout: 1200
+      when: distro_config.family == "debian"
+
+    - name: Install keepalived and haproxy (RHEL/CentOS/Rocky with DNF)
+      ansible.builtin.dnf:
+        name:
+          - keepalived
+          - haproxy
+        state: present
+        update_cache: yes
+      when: distro_config.family == "rhel" and distro_config.package_manager == "dnf"
+
+    - name: Install keepalived and haproxy (RHEL/CentOS with YUM)
+      ansible.builtin.yum:
+        name:
+          - keepalived
+          - haproxy
+        state: present
+        update_cache: yes
+      when: distro_config.family == "rhel" and distro_config.package_manager == "yum"
+
+    - name: Install keepalived and haproxy (openSUSE)
+      ansible.builtin.zypper:
+        name:
+          - keepalived
+          - haproxy
+        state: present
+        update_cache: yes
+      when: distro_config.family == "suse"

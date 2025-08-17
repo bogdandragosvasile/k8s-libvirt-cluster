@@ -16,10 +16,81 @@ pipeline {
   }
 
   parameters {
-    booleanParam(name: 'SKIP_TERRAFORM', defaultValue: true, description: 'Skip Terraform stages')
-    booleanParam(name: 'SKIP_ANSIBLE', defaultValue: true, description: 'Skip Ansible stages') 
-    booleanParam(name: 'INSTALL_METALLB', defaultValue: true, description: 'Install MetalLB')
-    booleanParam(name: 'INSTALL_INGRESS', defaultValue: true, description: 'Install Nginx Ingress Controller with MetalLB integration')
+    // Core deployment parameters
+    booleanParam(name: 'SKIP_TERRAFORM', defaultValue: false, description: 'Skip Terraform infrastructure deployment')
+    booleanParam(name: 'SKIP_ANSIBLE', defaultValue: false, description: 'Skip Ansible configuration')
+    
+    // Operating System Selection
+    choice(
+      name: 'LINUX_DISTRO',
+      choices: [
+        'ubuntu-24.04',
+        'ubuntu-22.04',
+        'ubuntu-20.04',
+        'centos-9',
+        'centos-8',
+        'rocky-9',
+        'rocky-8',
+        'debian-12',
+        'debian-11',
+        'opensuse-15.5',
+        'opensuse-15.4'
+      ],
+      description: 'Linux distribution for VMs'
+    )
+    
+    // Network Configuration
+    choice(
+      name: 'NETWORK_MODE',
+      choices: ['nat', 'bridge'],
+      description: 'Network mode: NAT (isolated) or Bridge (host network)'
+    )
+    
+    string(
+      name: 'BRIDGE_INTERFACE',
+      defaultValue: 'br0',
+      description: 'Bridge interface name (only for bridge mode)'
+    )
+    
+    string(
+      name: 'NETWORK_CIDR',
+      defaultValue: '',
+      description: 'Network CIDR (auto-detected if empty). Example: 192.168.1.0/24'
+    )
+    
+    string(
+      name: 'METALLB_IP_RANGE',
+      defaultValue: '',
+      description: 'MetalLB IP range (auto-calculated if empty). Example: 192.168.1.240-192.168.1.250'
+    )
+    
+    // Resource Configuration
+    string(name: 'CP_MEMORY', defaultValue: '4096', description: 'Control plane memory (MB)')
+    string(name: 'CP_CPU', defaultValue: '2', description: 'Control plane CPU cores')
+    string(name: 'WORKER_MEMORY', defaultValue: '8192', description: 'Worker memory (MB)')
+    string(name: 'WORKER_CPU', defaultValue: '4', description: 'Worker CPU cores')
+    
+    // Service Installation
+    booleanParam(name: 'INSTALL_METALLB', defaultValue: true, description: 'Install MetalLB load balancer')
+    booleanParam(name: 'INSTALL_INGRESS', defaultValue: true, description: 'Install Nginx Ingress Controller')
+    booleanParam(name: 'INSTALL_CERTMANAGER', defaultValue: true, description: 'Install cert-manager for SSL certificates')
+    
+    // Let's Encrypt Configuration
+    string(
+      name: 'LETSENCRYPT_EMAIL',
+      defaultValue: '',
+      description: 'Email for Let\'s Encrypt certificates (required for cert-manager)'
+    )
+    
+    booleanParam(
+      name: 'LETSENCRYPT_STAGING',
+      defaultValue: true,
+      description: 'Use Let\'s Encrypt staging environment (recommended for testing)'
+    )
+    
+    // Advanced Options
+    booleanParam(name: 'DOWNLOAD_IMAGES', defaultValue: true, description: 'Download base images if missing')
+    booleanParam(name: 'CLEANUP_ON_FAILURE', defaultValue: false, description: 'Clean up VMs on deployment failure')
   }
 
   options {
@@ -39,20 +110,16 @@ pipeline {
 
   stages {
     stage('Prepare Base Image') {
-      when { expression { !params.SKIP_TERRAFORM } }
+      when { expression { !params.SKIP_TERRAFORM && params.DOWNLOAD_IMAGES } }
       steps {
         sh '''
-          echo "\\033[36m[Prepare Base Image]\\033[0m"
-          BASE_IMAGE_PATH="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
-          BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
-          if [ ! -f "$BASE_IMAGE_PATH" ]; then
-            echo "Downloading base image..."
-            wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE_PATH" --progress=dot:giga
-          else
-            echo "Base image already exists - skipping download."
-          fi
-          chmod 666 "$BASE_IMAGE_PATH" || true
-          chown 107:107 "$BASE_IMAGE_PATH" || true
+          echo "\\033[36m[Prepare Base Image for ${LINUX_DISTRO}]\\033[0m"
+          
+          # Make download script executable
+          chmod +x scripts/download-base-images.sh
+          
+          # Download the specific distribution image
+          ./scripts/download-base-images.sh "${LINUX_DISTRO}"
         '''
       }
     }
@@ -91,9 +158,41 @@ pipeline {
       steps {
         dir('terraform') {
           sh '''
-            terraform plan \\
-              -var="kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}" \\
-              -out=plan.tfout
+            echo "\\033[36m[Terraform Plan with Configuration]\\033[0m"
+            echo "Distribution: ${LINUX_DISTRO}"
+            echo "Network Mode: ${NETWORK_MODE}"
+            echo "Bridge Interface: ${BRIDGE_INTERFACE}"
+            echo "Network CIDR: ${NETWORK_CIDR}"
+            echo "MetalLB IP Range: ${METALLB_IP_RANGE}"
+            
+            # Build Terraform variables
+            TF_VARS="-var=kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}"
+            TF_VARS="$TF_VARS -var=linux_distro=${LINUX_DISTRO}"
+            TF_VARS="$TF_VARS -var=network_mode=${NETWORK_MODE}"
+            TF_VARS="$TF_VARS -var=bridge_interface=${BRIDGE_INTERFACE}"
+            TF_VARS="$TF_VARS -var=cp_memory_mb=${CP_MEMORY}"
+            TF_VARS="$TF_VARS -var=cp_cpu_cores=${CP_CPU}"
+            TF_VARS="$TF_VARS -var=worker_memory_mb=${WORKER_MEMORY}"
+            TF_VARS="$TF_VARS -var=worker_cpu_cores=${WORKER_CPU}"
+            TF_VARS="$TF_VARS -var=enable_cert_manager=${INSTALL_CERTMANAGER}"
+            TF_VARS="$TF_VARS -var=letsencrypt_email=${LETSENCRYPT_EMAIL}"
+            TF_VARS="$TF_VARS -var=letsencrypt_staging=${LETSENCRYPT_STAGING}"
+            
+            # Add optional parameters if provided
+            if [ -n "${NETWORK_CIDR}" ]; then
+              if [ "${NETWORK_MODE}" = "bridge" ]; then
+                TF_VARS="$TF_VARS -var=bridge_network_cidr=${NETWORK_CIDR}"
+              else
+                TF_VARS="$TF_VARS -var=nat_network_cidr=${NETWORK_CIDR}"
+              fi
+            fi
+            
+            if [ -n "${METALLB_IP_RANGE}" ]; then
+              TF_VARS="$TF_VARS -var=metallb_ip_range=${METALLB_IP_RANGE}"
+            fi
+            
+            # Run terraform plan
+            terraform plan $TF_VARS -out=plan.tfout
           '''
         }
       }
@@ -115,23 +214,57 @@ pipeline {
           sh 'terraform output -json > outputs.json && cat outputs.json'
         }
         sh '''
-          echo "\\033[36m[Preserve original vars.yaml and append Terraform outputs]\\033[0m"
+          echo "\\033[36m[Generate Enhanced Ansible Configuration]\\033[0m"
           
-          # Show original vars.yaml
-          echo "Original vars.yaml:"
-          cat ansible/vars.yaml
+          # Backup original vars.yaml
+          cp ansible/vars.yaml ansible/vars.yaml.backup
           
-          # Append Terraform outputs to existing vars.yaml (don't overwrite!)
-          echo "" >> ansible/vars.yaml
-          echo "# Terraform VM outputs:" >> ansible/vars.yaml
-          jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
+          # Extract Terraform outputs
+          TERRAFORM_OUTPUTS=$(cat terraform/outputs.json)
           
-          echo "\\033[36m[Final vars.yaml with Terraform outputs:]\\033[0m"
+          # Update vars.yaml with enhanced configuration
+          cat >> ansible/vars.yaml << EOF
+
+# =============================================================================
+# Dynamic Configuration from Jenkins Pipeline
+# =============================================================================
+# Distribution Configuration
+SELECTED_DISTRO: "${LINUX_DISTRO}"
+NETWORK_MODE: "${NETWORK_MODE}"
+BRIDGE_INTERFACE: "${BRIDGE_INTERFACE}"
+
+# Resource Configuration
+CP_MEMORY_MB: ${CP_MEMORY}
+CP_CPU_CORES: ${CP_CPU}
+WORKER_MEMORY_MB: ${WORKER_MEMORY}
+WORKER_CPU_CORES: ${WORKER_CPU}
+
+# Service Configuration
+INSTALL_METALLB: ${INSTALL_METALLB}
+INSTALL_INGRESS: ${INSTALL_INGRESS}
+CERT_MANAGER_ENABLED: ${INSTALL_CERTMANAGER}
+LETSENCRYPT_EMAIL: "${LETSENCRYPT_EMAIL}"
+LETSENCRYPT_STAGING: ${LETSENCRYPT_STAGING}
+
+# Network Configuration
+METALLB_IP_RANGE: "${METALLB_IP_RANGE}"
+NETWORK_CIDR: "${NETWORK_CIDR}"
+
+# Terraform VM outputs:
+EOF
+          
+          # Append Terraform outputs
+          echo "$TERRAFORM_OUTPUTS" | jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' >> ansible/vars.yaml
+          
+          echo "\\033[36m[Final vars.yaml with all configurations:]\\033[0m"
           cat ansible/vars.yaml
           
           echo "\\033[36m[Check inventory.ini]\\033[0m"
           ls -l ansible/inventory.ini
           cat ansible/inventory.ini
+          
+          echo "\\033[36m[Terraform Configuration Summary:]\\033[0m"
+          echo "$TERRAFORM_OUTPUTS" | jq -r '.distro_info.value, .network_config.value, .cluster_access.value'
         '''
       }
     }
@@ -254,21 +387,31 @@ pipeline {
       steps {
         script {
           sh '''
-            echo "\\033[36m[Installing and configuring MetalLB]\\033[0m"
+            echo "\\033[36m[Installing and configuring MetalLB with enhanced features]\\033[0m"
             
-            # Get control plane IP
-            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+            # Get control plane IP and user from Terraform outputs
+            CONTROL_PLANE_IP=$(jq -r '.cluster_access.value.control_plane_ip' terraform/outputs.json)
+            SSH_USER=$(jq -r '.distro_info.value.user' terraform/outputs.json)
+            METALLB_RANGE=$(jq -r '.network_config.value.metallb_range' terraform/outputs.json)
+            NETWORK_MODE=$(jq -r '.network_config.value.mode' terraform/outputs.json)
+            
             echo "Control plane IP: $CONTROL_PLANE_IP"
+            echo "SSH User: $SSH_USER"
+            echo "MetalLB Range: $METALLB_RANGE"
+            echo "Network Mode: $NETWORK_MODE"
             
             # Test SSH connection
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "echo 'SSH connection successful'"
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} "echo 'SSH connection successful'"
             
-            # Copy the MetalLB installation script
-            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-metallb.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+            # Copy the enhanced MetalLB installation script
+            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-metallb.sh ${SSH_USER}@${CONTROL_PLANE_IP}:/tmp/
             
-            # Make it executable and run it
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
-              "chmod +x /tmp/install-metallb.sh && /tmp/install-metallb.sh"
+            # Run the enhanced installation script with parameters
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} \\
+              "chmod +x /tmp/install-metallb.sh && \\
+               METALLB_IP_RANGE='${METALLB_RANGE}' \\
+               NETWORK_MODE='${NETWORK_MODE}' \\
+               /tmp/install-metallb.sh"
             
             echo "🎉 MetalLB installation completed successfully!"
           '''
@@ -284,18 +427,94 @@ pipeline {
           sh '''
             echo "\\033[36m[Installing Nginx Ingress Controller]\\033[0m"
             
-            # Get control plane IP
-            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+            # Get connection details from Terraform outputs
+            CONTROL_PLANE_IP=$(jq -r '.cluster_access.value.control_plane_ip' terraform/outputs.json)
+            SSH_USER=$(jq -r '.distro_info.value.user' terraform/outputs.json)
+            
             echo "Control plane IP: $CONTROL_PLANE_IP"
+            echo "SSH User: $SSH_USER"
             
             # Copy the ingress installation script
-            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-nginx-ingress.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-nginx-ingress.sh ${SSH_USER}@${CONTROL_PLANE_IP}:/tmp/
             
             # Make it executable and run it
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} \\
               "chmod +x /tmp/install-nginx-ingress.sh && /tmp/install-nginx-ingress.sh"
             
             echo "🎉 Nginx Ingress Controller installation completed successfully!"
+          '''
+        }
+      }
+    }
+
+    stage('Install Cert-Manager') {
+      when { expression { params.INSTALL_CERTMANAGER } }
+      steps {
+        script {
+          sh '''
+            echo "\\033[36m[Installing Cert-Manager with Let's Encrypt]\\033[0m"
+            
+            # Get connection details from Terraform outputs
+            CONTROL_PLANE_IP=$(jq -r '.cluster_access.value.control_plane_ip' terraform/outputs.json)
+            SSH_USER=$(jq -r '.distro_info.value.user' terraform/outputs.json)
+            
+            echo "Control plane IP: $CONTROL_PLANE_IP"
+            echo "SSH User: $SSH_USER"
+            echo "Let's Encrypt Email: ${LETSENCRYPT_EMAIL}"
+            echo "Let's Encrypt Staging: ${LETSENCRYPT_STAGING}"
+            
+            # Install cert-manager via kubectl
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} '''
+              echo "Installing cert-manager..."
+              
+              # Create cert-manager namespace
+              kubectl create namespace cert-manager || true
+              
+              # Install cert-manager
+              kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.15.3/cert-manager.yaml
+              
+              # Wait for cert-manager to be ready
+              kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=cert-manager -n cert-manager --timeout=300s
+              
+              # Create ClusterIssuer for Let's Encrypt
+              if [ -n "${LETSENCRYPT_EMAIL}" ] && [ "${LETSENCRYPT_EMAIL}" != "" ]; then
+                ISSUER_NAME="letsencrypt-staging"
+                ACME_SERVER="https://acme-staging-v02.api.letsencrypt.org/directory"
+                
+                if [ "${LETSENCRYPT_STAGING}" = "false" ]; then
+                  ISSUER_NAME="letsencrypt-prod"
+                  ACME_SERVER="https://acme-v02.api.letsencrypt.org/directory"
+                fi
+                
+                cat <<EOF | kubectl apply -f -
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: $ISSUER_NAME
+spec:
+  acme:
+    server: $ACME_SERVER
+    email: ${LETSENCRYPT_EMAIL}
+    privateKeySecretRef:
+      name: $ISSUER_NAME
+    solvers:
+    - http01:
+        ingress:
+          class: nginx
+EOF
+                
+                echo "Created ClusterIssuer: $ISSUER_NAME"
+              else
+                echo "No Let's Encrypt email provided, skipping ClusterIssuer creation"
+              fi
+              
+              # Show cert-manager status
+              echo "=== Cert-Manager Status ==="
+              kubectl get pods -n cert-manager
+              kubectl get clusterissuers
+            '''
+            
+            echo "🎉 Cert-Manager installation completed successfully!"
           '''
         }
       }
@@ -308,26 +527,81 @@ pipeline {
       steps {
         script {
           sh '''
-            echo "=================================="
-            echo "🎉 KUBERNETES CLUSTER SUMMARY"
-            echo "=================================="
+            echo "=========================================================="
+            echo "🎉 ENHANCED KUBERNETES CLUSTER DEPLOYMENT SUMMARY"
+            echo "=========================================================="
             
-            # Get control plane IP
-            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+            # Get connection details from Terraform outputs
+            CONTROL_PLANE_IP=$(jq -r '.cluster_access.value.control_plane_ip' terraform/outputs.json)
+            SSH_USER=$(jq -r '.distro_info.value.user' terraform/outputs.json)
+            API_ENDPOINT=$(jq -r '.cluster_access.value.api_endpoint' terraform/outputs.json)
+            VIRTUAL_IP=$(jq -r '.virtual_ip.value' terraform/outputs.json)
+            
+            echo "🏗️ INFRASTRUCTURE CONFIGURATION:"
+            echo "   Distribution: ${LINUX_DISTRO}"
+            echo "   Network Mode: ${NETWORK_MODE}"
+            echo "   SSH User: $SSH_USER"
+            echo "   API Endpoint: $API_ENDPOINT"
+            echo "   Virtual IP: $VIRTUAL_IP"
+            echo "   Control Plane: $CONTROL_PLANE_IP"
+            echo ""
+            
+            echo "⚙️ RESOURCE ALLOCATION:"
+            echo "   Control Plane: ${CP_CPU} vCPU, ${CP_MEMORY} MB RAM"
+            echo "   Worker Nodes: ${WORKER_CPU} vCPU, ${WORKER_MEMORY} MB RAM"
+            echo ""
             
             echo "📊 CLUSTER STATUS:"
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get nodes -o wide"
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} "kubectl get nodes -o wide"
+            echo ""
             
             echo "🚀 SYSTEM PODS:"
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n kube-system"
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} "kubectl get pods -n kube-system --no-headers | wc -l" | xargs echo "   System pods running:"
+            echo ""
             
-            echo "⚖️ METALLB STATUS:"
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n metallb-system" || echo "MetalLB not installed"
+            if [ "${INSTALL_METALLB}" = "true" ]; then
+              echo "⚖️ METALLB STATUS:"
+              METALLB_RANGE=$(jq -r '.network_config.value.metallb_range' terraform/outputs.json)
+              echo "   IP Range: $METALLB_RANGE"
+              ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} \\
+                "kubectl get pods -n metallb-system --no-headers | wc -l" | xargs echo "   MetalLB pods running:"
+              echo ""
+            fi
+            
+            if [ "${INSTALL_INGRESS}" = "true" ]; then
+              echo "🌐 NGINX INGRESS STATUS:"
+              ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} \\
+                "kubectl get pods -n ingress-nginx --no-headers 2>/dev/null | wc -l" | xargs echo "   Ingress pods running:" || echo "   Ingress not found"
+              echo ""
+            fi
+            
+            if [ "${INSTALL_CERTMANAGER}" = "true" ]; then
+              echo "🔒 CERT-MANAGER STATUS:"
+              if [ -n "${LETSENCRYPT_EMAIL}" ] && [ "${LETSENCRYPT_EMAIL}" != "" ]; then
+                echo "   Let's Encrypt Email: ${LETSENCRYPT_EMAIL}"
+                echo "   Environment: $([ '${LETSENCRYPT_STAGING}' = 'true' ] && echo 'Staging' || echo 'Production')"
+              fi
+              ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} \\
+                "kubectl get pods -n cert-manager --no-headers 2>/dev/null | wc -l" | xargs echo "   Cert-manager pods running:" || echo "   Cert-manager not found"
+              ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} \\
+                "kubectl get clusterissuers --no-headers 2>/dev/null | wc -l" | xargs echo "   ClusterIssuers configured:" || echo "   No ClusterIssuers found"
+              echo ""
+            fi
             
             echo "🌐 SERVICES WITH EXTERNAL IPs:"
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get svc --all-namespaces -o wide | grep -E 'LoadBalancer|EXTERNAL-IP'" || echo "No LoadBalancer services found"
+            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ${SSH_USER}@${CONTROL_PLANE_IP} \\
+              "kubectl get svc --all-namespaces -o wide | grep LoadBalancer" || echo "   No LoadBalancer services found"
+            echo ""
             
-            echo "✅ Your Kubernetes cluster is ready!"
+            echo "🔧 ACCESS INFORMATION:"
+            echo "   SSH Command: ssh -i ~/.ssh/k8s-cluster ${SSH_USER}@${CONTROL_PLANE_IP}"
+            echo "   Kubeconfig: scp -i ~/.ssh/k8s-cluster ${SSH_USER}@${CONTROL_PLANE_IP}:~/.kube/config ~/.kube/config"
+            echo "   Update server: sed -i 's/${CONTROL_PLANE_IP}/${VIRTUAL_IP}/g' ~/.kube/config"
+            echo ""
+            
+            echo "✅ DEPLOYMENT COMPLETED SUCCESSFULLY!"
+            echo "🎯 Your enhanced multi-distribution Kubernetes cluster is ready!"
+            echo "📋 Configuration saved in Terraform outputs and Ansible vars"
           '''
         }
       }

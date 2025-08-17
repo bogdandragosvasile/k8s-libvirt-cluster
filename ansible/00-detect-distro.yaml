@@ -1,0 +1,217 @@
+---
+# =============================================================================
+# Distribution Detection and Configuration Setup
+# =============================================================================
+# This playbook detects the Linux distribution on each host and sets
+# appropriate variables for package management and system configuration.
+
+- name: Detect Linux distribution and configure variables
+  hosts: all
+  become: true
+  gather_facts: true
+  vars_files:
+    - vars.yaml
+  
+  tasks:
+    - name: Display system information
+      ansible.builtin.debug:
+        msg: |
+          Host: {{ inventory_hostname }}
+          OS Family: {{ ansible_os_family }}
+          Distribution: {{ ansible_distribution }}
+          Distribution Version: {{ ansible_distribution_version }}
+          Distribution Release: {{ ansible_distribution_release | default('N/A') }}
+          Architecture: {{ ansible_architecture }}
+
+    - name: Set distribution-specific configuration for Debian/Ubuntu
+      ansible.builtin.set_fact:
+        distro_config:
+          package_manager: "apt"
+          family: "debian"
+          default_user: "{{ ansible_user }}"
+          ssh_service: "ssh"
+          docker_package: "docker.io"
+          docker_service: "docker"
+          firewall_service: "ufw"
+          k8s_repo_key_url: "https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key"
+          k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/v1.30/deb/"
+          docker_repo_key_url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg"
+          docker_repo_url: "https://download.docker.com/linux/{{ ansible_distribution | lower }}"
+      when: ansible_os_family == "Debian"
+
+    - name: Set distribution-specific configuration for RHEL/CentOS/Rocky
+      ansible.builtin.set_fact:
+        distro_config:
+          package_manager: "{{ 'dnf' if ansible_distribution_major_version | int >= 8 else 'yum' }}"
+          family: "rhel"
+          default_user: "{{ ansible_user }}"
+          ssh_service: "sshd"
+          docker_package: "docker-ce"
+          docker_service: "docker"
+          firewall_service: "firewalld"
+          k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/v1.30/rpm/"
+          docker_repo_url: "https://download.docker.com/linux/centos/docker-ce.repo"
+      when: ansible_os_family == "RedHat"
+
+    - name: Set distribution-specific configuration for openSUSE
+      ansible.builtin.set_fact:
+        distro_config:
+          package_manager: "zypper"
+          family: "suse"
+          default_user: "{{ ansible_user }}"
+          ssh_service: "sshd"
+          docker_package: "docker"
+          docker_service: "docker"
+          firewall_service: "firewalld"
+          k8s_repo_key_url: "https://pkgs.k8s.io/core:/stable:/v1.30/rpm/repodata/repomd.xml.key"
+          k8s_repo_url: "https://pkgs.k8s.io/core:/stable:/v1.30/rpm/"
+          docker_repo_url: "https://download.docker.com/linux/opensuse"
+      when: ansible_os_family == "Suse"
+
+    - name: Fail if unsupported distribution
+      ansible.builtin.fail:
+        msg: "Unsupported distribution: {{ ansible_distribution }} ({{ ansible_os_family }})"
+      when: ansible_os_family not in ["Debian", "RedHat", "Suse"]
+
+    - name: Display detected configuration
+      ansible.builtin.debug:
+        var: distro_config
+
+    - name: Update package cache (Debian/Ubuntu)
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+      when: distro_config.family == "debian"
+
+    - name: Update package cache (RHEL/CentOS/Rocky)
+      ansible.builtin.package:
+        name: "*"
+        state: latest
+        update_cache: true
+      when: distro_config.family == "rhel" and distro_config.package_manager == "dnf"
+
+    - name: Update package cache (older RHEL/CentOS)
+      ansible.builtin.yum:
+        name: "*"
+        state: latest
+        update_cache: true
+      when: distro_config.family == "rhel" and distro_config.package_manager == "yum"
+
+    - name: Update package cache (openSUSE)
+      ansible.builtin.zypper:
+        name: "*"
+        state: latest
+        update_cache: true
+      when: distro_config.family == "suse"
+
+    - name: Install basic required packages (Debian/Ubuntu)
+      ansible.builtin.apt:
+        name:
+          - curl
+          - wget
+          - ca-certificates
+          - apt-transport-https
+          - gnupg
+          - lsb-release
+          - software-properties-common
+        state: present
+      when: distro_config.family == "debian"
+
+    - name: Install basic required packages (RHEL/CentOS/Rocky)
+      ansible.builtin.package:
+        name:
+          - curl
+          - wget
+          - ca-certificates
+          - gnupg2
+          - dnf-plugins-core
+        state: present
+      when: distro_config.family == "rhel" and distro_config.package_manager == "dnf"
+
+    - name: Install basic required packages (older RHEL/CentOS)
+      ansible.builtin.yum:
+        name:
+          - curl
+          - wget
+          - ca-certificates
+          - gnupg2
+          - yum-utils
+        state: present
+      when: distro_config.family == "rhel" and distro_config.package_manager == "yum"
+
+    - name: Install basic required packages (openSUSE)
+      ansible.builtin.zypper:
+        name:
+          - curl
+          - wget
+          - ca-certificates
+          - gnupg2
+        state: present
+      when: distro_config.family == "suse"
+
+    - name: Ensure Python3 is installed and set as default
+      ansible.builtin.package:
+        name: python3
+        state: present
+
+    - name: Create python3 symlink if needed
+      ansible.builtin.file:
+        src: /usr/bin/python3
+        dest: /usr/bin/python
+        state: link
+      ignore_errors: true
+
+    - name: Disable swap permanently
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+        line: '# \1'
+        backrefs: true
+      notify: disable swap
+
+    - name: Disable swap immediately
+      ansible.builtin.command: swapoff -a
+      ignore_errors: true
+
+    - name: Enable IP forwarding
+      ansible.builtin.sysctl:
+        name: net.ipv4.ip_forward
+        value: '1'
+        sysctl_set: true
+        state: present
+        reload: true
+
+    - name: Configure kernel modules for Kubernetes
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+      notify: load kernel modules
+
+    - name: Configure sysctl parameters for Kubernetes
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/k8s.conf
+        content: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+      notify: reload sysctl
+
+  handlers:
+    - name: disable swap
+      ansible.builtin.command: swapoff -a
+      ignore_errors: true
+
+    - name: load kernel modules
+      ansible.builtin.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+      ignore_errors: true
+
+    - name: reload sysctl
+      ansible.builtin.command: sysctl --system
+      ignore_errors: true

@@ -1,4 +1,5 @@
 ---
+- import_playbook: 00-detect-distro.yaml
 - import_playbook: 01-initial.yaml
 - import_playbook: 02-packages.yaml
 - import_playbook: 03-lb.yaml
@@ -7,3 +8,4 @@
 - import_playbook: 05.5-lb-full-config.yaml
 - import_playbook: 06-worker.yaml
 - import_playbook: 07-k8s-config.yaml
+- import_playbook: 08-cert-manager.yaml

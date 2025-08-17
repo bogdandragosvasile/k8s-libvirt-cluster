@@ -1,0 +1,121 @@
+---
+# =============================================================================
+# Cert-Manager Installation and Configuration
+# =============================================================================
+# This playbook installs cert-manager with Let's Encrypt integration
+# for automatic SSL certificate management.
+
+- name: Install and configure cert-manager
+  hosts: control_plane_init
+  become: true
+  vars_files:
+    - vars.yaml
+  
+  tasks:
+    - name: Check if cert-manager is enabled
+      ansible.builtin.debug:
+        msg: "Cert-manager installation: {{ 'enabled' if CERT_MANAGER_ENABLED else 'disabled' }}"
+
+    - name: Install cert-manager
+      block:
+        - name: Create cert-manager namespace
+          ansible.builtin.shell: |
+            kubectl create namespace cert-manager || true
+          become_user: "{{ distro_config.default_user | default('ubuntu') }}"
+
+        - name: Add Jetstack Helm repository
+          ansible.builtin.shell: |
+            kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/{{ CERT_MANAGER_VERSION }}/cert-manager.yaml
+          become_user: "{{ distro_config.default_user | default('ubuntu') }}"
+
+        - name: Wait for cert-manager to be ready
+          ansible.builtin.shell: |
+            kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance=cert-manager -n cert-manager --timeout=300s
+          become_user: "{{ distro_config.default_user | default('ubuntu') }}"
+          retries: 3
+          delay: 30
+
+        - name: Create Let's Encrypt staging ClusterIssuer
+          ansible.builtin.shell: |
+            kubectl apply -f - <<EOF
+            apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: letsencrypt-staging
+            spec:
+              acme:
+                server: https://acme-staging-v02.api.letsencrypt.org/directory
+                email: {{ LETSENCRYPT_EMAIL | default('admin@example.com') }}
+                privateKeySecretRef:
+                  name: letsencrypt-staging
+                solvers:
+                - http01:
+                    ingress:
+                      class: nginx
+            EOF
+          become_user: "{{ distro_config.default_user | default('ubuntu') }}"
+          when: LETSENCRYPT_EMAIL is defined and LETSENCRYPT_EMAIL != ""
+
+        - name: Create Let's Encrypt production ClusterIssuer
+          ansible.builtin.shell: |
+            kubectl apply -f - <<EOF
+            apiVersion: cert-manager.io/v1
+            kind: ClusterIssuer
+            metadata:
+              name: letsencrypt-prod
+            spec:
+              acme:
+                server: https://acme-v02.api.letsencrypt.org/directory
+                email: {{ LETSENCRYPT_EMAIL | default('admin@example.com') }}
+                privateKeySecretRef:
+                  name: letsencrypt-prod
+                solvers:
+                - http01:
+                    ingress:
+                      class: nginx
+            EOF
+          become_user: "{{ distro_config.default_user | default('ubuntu') }}"
+          when: LETSENCRYPT_EMAIL is defined and LETSENCRYPT_EMAIL != "" and not LETSENCRYPT_STAGING
+
+        - name: Create a test certificate (staging)
+          ansible.builtin.shell: |
+            kubectl apply -f - <<EOF
+            apiVersion: cert-manager.io/v1
+            kind: Certificate
+            metadata:
+              name: test-cert-staging
+              namespace: default
+            spec:
+              secretName: test-cert-staging-tls
+              issuerRef:
+                name: letsencrypt-staging
+                kind: ClusterIssuer
+              dnsNames:
+              - test.local
+            EOF
+          become_user: "{{ distro_config.default_user | default('ubuntu') }}"
+          when: LETSENCRYPT_EMAIL is defined and LETSENCRYPT_EMAIL != ""
+
+        - name: Display cert-manager status
+          ansible.builtin.shell: |
+            echo "=== Cert-Manager Pods ==="
+            kubectl get pods -n cert-manager
+            echo ""
+            echo "=== ClusterIssuers ==="
+            kubectl get clusterissuers
+            echo ""
+            echo "=== Certificates ==="
+            kubectl get certificates --all-namespaces
+          become_user: "{{ distro_config.default_user | default('ubuntu') }}"
+          register: certmanager_status
+
+        - name: Show cert-manager status
+          ansible.builtin.debug:
+            msg: "{{ certmanager_status.stdout_lines }}"
+
+      when: CERT_MANAGER_ENABLED | default(false)
+
+    - name: Skip cert-manager installation
+      ansible.builtin.debug:
+        msg: "Cert-manager installation skipped (CERT_MANAGER_ENABLED=false)"
+      when: not (CERT_MANAGER_ENABLED | default(false))
