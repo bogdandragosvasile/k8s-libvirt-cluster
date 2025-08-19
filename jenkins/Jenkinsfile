@@ -20,7 +20,7 @@ pipeline {
     ANSIBLE_INVENTORY = 'ansible/inventory.ini'
     ANSIBLE_STDOUT_CALLBACK = 'yaml'
     ANSIBLE_HOST_KEY_CHECKING = 'False'
-    SSH_KEY_PATH = '/root/.ssh/id_ed25519' // Root ssh key path
+    SSH_KEY_PATH = '/root/.ssh/id_ed25519'  // root key path
   }
 
   stages {
@@ -34,7 +34,6 @@ pipeline {
               if ! virsh pool-info default >/dev/null 2>&1; then
                 virsh pool-define-as default dir --target /var/lib/libvirt/images
               fi
-
               virsh pool-info default | grep -q "^State:.*running" || virsh pool-start default
               virsh pool-autostart default
             '''
@@ -49,12 +48,11 @@ pipeline {
         sh '''
           BASE_IMAGE="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
           BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
-
           if [ ! -f "$BASE_IMAGE" ]; then
             echo "Downloading base image..."
             wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE" --progress=dot:giga
           else
-            echo "Base image already exists, skipping download."
+            echo "Base image already present, skipping download."
           fi
         '''
       }
@@ -97,17 +95,46 @@ pipeline {
       }
     }
 
-    stage('Generate Ansible Inventory') {
+    stage('Generate Ansible Vars File') {
       when { expression { !params.SKIP_TERRAFORM } }
       steps {
         dir('terraform') {
           sh 'terraform output -json > outputs.json'
         }
         sh '''
-          jq -r 'to_entries|map("\\(.key): \\(.value.value)")|.[]' terraform/outputs.json >> ansible/vars.yaml
-          echo "Updated ansible/vars.yaml:"
-          cat ansible/vars.yaml
+          jq -r '
+            ["---"],
+            "# Kubernetes Configuration",
+            "K8S_VERSION: 1.30.1-1.1",
+            "K8S_API_SERVER_PORT: 6443",
+            "",
+            "# Network Configuration",
+            "VIRTUAL_IP: \\"192.168.122.100\\"",
+            "VIRTUAL_IP_PORT: 6443",
+            "IP_HOST_LB1: 192.168.122.51",
+            "IP_HOST_LB2: 192.168.122.52",
+            "IP_HOST_CP1: 192.168.122.101",
+            "IP_HOST_CP2: 192.168.122.102",
+            "IP_HOST_CP3: 192.168.122.103",
+            "IP_HOST_W1: 192.168.122.201",
+            "",
+            "# Pod Network Configuration",
+            "POD_CIDR_FLANNEL: 10.244.0.0/16",
+            "POD_CIDR_CALICO: 192.168.0.0/16",
+            "VERSION_CALICO: \\"v3.26.1\\"",
+            "",
+            "# Authentication",
+            "PASSWORD_KUBEADMIN: \\"kubeadmin\\"",
+            "PASSWORD_KEEPALIVED: \\"fW/19P0JzwNqIveyXfnhLXswVBUSFF4d3oMyVSi3g/U=\\"",
+            "ansible_python_interpreter: /usr/bin/python3",
+            "",
+            "# VM IPs (auto-updated by Jenkins):",
+            "vm_ips:"
+          ] + (
+            .vm_ips | to_entries | map("  \(.key): \"\(.value)\"")
+          ) | .[] > ansible/vars.yaml
         '''
+        sh 'cat ansible/vars.yaml'
       }
     }
 
@@ -115,10 +142,13 @@ pipeline {
       when { expression { !params.SKIP_ANSIBLE } }
       steps {
         script {
-          def ips = sh(script: "jq -r '.vm_ips | .[]' terraform/outputs.json", returnStdout: true).trim().split('\n')
-          for (ip in ips) {
-            retry(60) {
-              sh "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY_PATH} ubuntu@${ip} true"
+          def ips = sh(script: "jq -r '.vm_ips | to_entries[] | .value' terraform/outputs.json", returnStdout: true).trim().split('\n')
+          echo "VM IPs detected for SSH wait: ${ips}"
+          withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
+            for (ip in ips) {
+              retry(15) {
+                sh "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY} ubuntu@${ip} true"
+              }
             }
           }
         }
@@ -152,33 +182,45 @@ pipeline {
     stage('Install MetalLB') {
       when { expression { params.INSTALL_METALLB } }
       steps {
-        sh '''
-          CONTROL_PLANE_IP=$(ansible -i ansible/inventory.ini control_plane_init --list-hosts | tail -1)
-          scp -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} scripts/install-metallb.sh ubuntu@$CONTROL_PLANE_IP:/tmp/
-          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "chmod +x /tmp/install-metallb.sh && /tmp/install-metallb.sh"
-        '''
+        script {
+          def lbIp = sh(script: "jq -r '.vm_ips.loadbalancer1' terraform/outputs.json", returnStdout: true).trim()
+          withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
+            sh """
+              scp -o StrictHostKeyChecking=no -i ${SSH_KEY} scripts/install-metallb.sh ubuntu@${lbIp}:/tmp/
+              ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${lbIp} 'chmod +x /tmp/install-metallb.sh && /tmp/install-metallb.sh'
+            """
+          }
+        }
       }
     }
 
     stage('Install Nginx Ingress Controller') {
       when { expression { params.INSTALL_INGRESS } }
       steps {
-        sh '''
-          CONTROL_PLANE_IP=$(ansible -i ansible/inventory.ini control_plane_init --list-hosts | tail -1)
-          scp -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} scripts/install-nginx-ingress.sh ubuntu@$CONTROL_PLANE_IP:/tmp/
-          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "chmod +x /tmp/install-nginx-ingress.sh && /tmp/install-nginx-ingress.sh"
-        '''
+        script {
+          def lbIp = sh(script: "jq -r '.vm_ips.loadbalancer1' terraform/outputs.json", returnStdout: true).trim()
+          withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
+            sh """
+              scp -o StrictHostKeyChecking=no -i ${SSH_KEY} scripts/install-nginx-ingress.sh ubuntu@${lbIp}:/tmp/
+              ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${lbIp} 'chmod +x /tmp/install-nginx-ingress.sh && /tmp/install-nginx-ingress.sh'
+            """
+          }
+        }
       }
     }
 
     stage('Final Cluster Summary') {
       steps {
-        sh '''
-          CONTROL_PLANE_IP=$(ansible -i ansible/inventory.ini control_plane_init --list-hosts | tail -1)
-          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "kubectl get nodes -o wide"
-          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "kubectl get pods -n kube-system"
-          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "kubectl get pods -n metallb-system" || echo "MetalLB not installed"
-        '''
+        script {
+          def cpIp = sh(script: "jq -r '.vm_ips.kcontrolplane1' terraform/outputs.json", returnStdout: true).trim()
+          withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
+            sh """
+              ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${cpIp} kubectl get nodes -o wide
+              ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${cpIp} kubectl get pods -n kube-system
+              ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${cpIp} kubectl get pods -n metallb-system || echo "MetalLB not installed"
+            """
+          }
+        }
       }
     }
   }
@@ -186,10 +228,12 @@ pipeline {
   post {
     always {
       dir('ansible') {
-        sh '''
-          echo "Collecting cluster status logs"
-          ansible -i inventory.ini control_plane_init -m shell -a "kubectl get nodes" --extra-vars @vars.yaml || echo "Failed to get nodes"
-        '''
+        withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
+          sh """
+            echo "Collecting cluster status logs"
+            ansible -i inventory.ini control_plane_init -m shell -a "kubectl get nodes" --extra-vars @vars.yaml || echo "Failed to get nodes"
+          """
+        }
       }
       echo 'Pipeline completed.'
     }
