@@ -101,7 +101,7 @@ pipeline {
         dir('terraform') {
           sh 'terraform output -json > outputs.json'
         }
-        sh '''
+        sh """
           jq -r '
             ["---"],
             "# Kubernetes Configuration",
@@ -131,12 +131,13 @@ pipeline {
             "# VM IPs (auto-updated by Jenkins):",
             "vm_ips:"
           ] + (
-            .vm_ips | to_entries | map("  \(.key): \"\(.value)\"")
+            .vm_ips | to_entries | map("  \\\\(\\.key\\\\): \\"\\\\(.value)\\"")
           ) | .[] > ansible/vars.yaml
-        '''
+        """
         sh 'cat ansible/vars.yaml'
       }
     }
+
 
     stage('Wait for SSH Access') {
       when { expression { !params.SKIP_ANSIBLE } }
