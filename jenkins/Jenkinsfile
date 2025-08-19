@@ -128,10 +128,16 @@ pipeline {
       when { expression { !params.SKIP_TERRAFORM } }
       steps {
         dir('terraform') {
-          sh "terraform plan -var=kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY} -out=plan.tfout"
+          // Use Groovy triple single-quotes and avoid unsafe interpolation of secret directly
+          withCredentials([string(credentialsId: 'kube-ssh-public-key', variable: 'KUBE_SSH_PUBLIC_KEY')]) {
+            sh '''
+              terraform plan -var="kube_ssh_public_key=$KUBE_SSH_PUBLIC_KEY" -out=plan.tfout
+            '''
+          }
         }
       }
     }
+
 
     stage('Terraform Apply') {
       when { expression { !params.SKIP_TERRAFORM } }
