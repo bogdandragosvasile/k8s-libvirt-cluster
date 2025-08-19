@@ -41,9 +41,7 @@ pipeline {
                   virsh pool-define-as default dir --target /var/lib/libvirt/images
                 fi
 
-                echo "Checking permissions and ownership on /var/lib/libvirt/images..."
-                chown -R root:libvirt /var/lib/libvirt/images || true
-                chmod -R g+rwXs /var/lib/libvirt/images || true
+                # Removed chown/chmod here to avoid permission errors in Jenkins.
 
                 STATE=$(virsh pool-info default | grep State | awk '{print $2}')
                 if [ "$STATE" != "running" ]; then
@@ -88,6 +86,7 @@ pipeline {
         }
       }
     }
+
 
 
     stage('Prepare Base Image') {
