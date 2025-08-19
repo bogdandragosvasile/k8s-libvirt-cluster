@@ -30,30 +30,57 @@ pipeline {
       steps {
         script {
           int retries = 5
-          def success = false
           for (int i = 1; i <= retries; i++) {
             try {
               sh '''
                 set -e
-                if ! virsh pool-info default &>/dev/null; then
+                # Check if default pool exists
+                if virsh pool-info default >/dev/null 2>&1; then
+                  echo "Default pool already exists."
+                else
                   echo "Defining default storage pool..."
                   virsh pool-define-as default dir --target /var/lib/libvirt/images
                 fi
 
-                echo "Starting default storage pool..."
-                virsh pool-start default || true
+                # Ensure permissions on pool dir
+                echo "Setting group ownership and permissions on /var/lib/libvirt/images..."
+                sudo chown -R root:libvirt /var/lib/libvirt/images
+                sudo chmod -R g+rwXs /var/lib/libvirt/images
 
-                echo "Setting default storage pool to autostart..."
-                virsh pool-autostart default || true
-
+                # Start the pool if not running
                 STATE=$(virsh pool-info default | grep State | awk '{print $2}')
                 if [ "$STATE" != "running" ]; then
-                  echo "Default pool state is $STATE, retrying..."
+                  echo "Starting default storage pool..."
+                  virsh pool-start default
+                else
+                  echo "Default storage pool is already running."
+                fi
+
+                # Enable autostart if not already enabled
+                AUTOSTART=$(virsh pool-info default | grep Autostart | awk '{print $2}')
+                if [ "$AUTOSTART" != "yes" ]; then
+                  echo "Enabling autostart for default storage pool..."
+                  virsh pool-autostart default
+                else
+                  echo "Autostart already enabled for default storage pool."
+                fi
+
+                # Check that permissions on the libvirt socket are accessible to jenkins user
+                echo "Checking permissions on libvirt socket..."
+                LIBVIRT_SOCK=/var/run/libvirt/libvirt-sock
+                if [ ! -e "$LIBVIRT_SOCK" ]; then
+                  echo "Libvirt socket $LIBVIRT_SOCK does not exist!"
                   exit 1
                 fi
-                echo "Default libvirt storage pool is ready and running."
+                ls -l $LIBVIRT_SOCK
+
+                # Check if jenkins is in libvirt group for socket access
+                if groups jenkins | grep -qw libvirt; then
+                  echo "Jenkins user is in libvirt group, OK."
+                else
+                  echo "WARNING: Jenkins user is NOT in libvirt group! This may cause permission issues."
+                fi
               '''
-              success = true
               break
             } catch (err) {
               echo "Attempt ${i} to ensure libvirt default pool failed: ${err}"
@@ -68,6 +95,7 @@ pipeline {
         }
       }
     }
+
 
     stage('Prepare Base Image') {
       when { expression { !params.SKIP_TERRAFORM } }
