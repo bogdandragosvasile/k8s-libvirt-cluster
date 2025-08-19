@@ -1,19 +1,5 @@
 pipeline {
-  agent {
-    docker {
-      image 'bogdandragos/jenkins-k8s-libvirt-agent:latest'
-      args """
-        --user 0
-        --privileged
-        --network host
-        -v /var/run/libvirt/libvirt-sock:/var/run/libvirt/libvirt-sock
-        -v /run/libvirt:/run/libvirt
-        -v /var/lib/libvirt/images:/var/lib/libvirt/images
-        -v /root/.ssh:/root/.ssh:ro
-      """
-      reuseNode true
-    }
-  }
+  agent any
 
   parameters {
     booleanParam(name: 'SKIP_TERRAFORM', defaultValue: true, description: 'Skip Terraform stages')
@@ -32,9 +18,10 @@ pipeline {
   environment {
     LIBVIRT_URI         = 'qemu:///system'
     ANSIBLE_INVENTORY   = 'inventory.ini'
-    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')
+    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key') // adjust credential if needed
     ANSIBLE_HOST_KEY_CHECKING = 'False'
     ANSIBLE_STDOUT_CALLBACK = 'yaml'
+    SSH_KEY_PATH        = '/var/lib/jenkins/.ssh/id_ed25519'
   }
 
   stages {
@@ -72,7 +59,7 @@ pipeline {
     stage('Checkout Code') {
       steps {
         git url: 'git@github.com:bogdandragosvasile/k8s-libvirt-cluster.git',
-            branch: 'master',
+            branch: 'local',
             credentialsId: 'github-ssh-key'
       }
     }
@@ -149,7 +136,7 @@ pipeline {
             echo "Checking SSH access on $host..."
             for i in $(seq 1 $MAX_RETRIES); do
               if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-                -i /root/.ssh/id_ed25519 -o ConnectTimeout=3 ubuntu@$host 'true' 2>/dev/null; then
+                -i ${SSH_KEY_PATH} -o ConnectTimeout=3 ubuntu@$host 'true' 2>/dev/null; then
                 echo "OK: $host reachable via SSH"
                 break
               fi
@@ -173,19 +160,14 @@ pipeline {
             try {
               sh '''
                 echo "\\033[36m[Ansible Setup - Enhanced Error Detection]\\033[0m"
-                
-                # Set strict error handling
                 set -euo pipefail
-                
-                # Run playbook with enhanced verbose output and error detection
                 ANSIBLE_HOST_KEY_CHECKING=False \\
                 ANSIBLE_STDOUT_CALLBACK=yaml \\
                 ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml \\
                   --extra-vars "@vars.yaml" \\
                   -vvv \\
                   --diff
-                
-                # Verify the deployment was successful
+
                 echo "\\033[36m[Post-Deployment Verification]\\033[0m"
                 ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
                   -a "kubectl get nodes" \\
@@ -194,28 +176,18 @@ pipeline {
             } catch (Exception e) {
               echo "\\033[31m[ANSIBLE PLAYBOOK FAILED]\\033[0m"
               echo "Error: ${e.getMessage()}"
-              
-              // Collect diagnostic information
               sh '''
                 echo "\\033[33m[Collecting Diagnostic Information]\\033[0m"
-                
-                # Check if any nodes are accessible
                 ansible -i ${ANSIBLE_INVENTORY} all -m ping --extra-vars "@vars.yaml" || true
-                
-                # Check kubelet status on all nodes
                 echo "\\033[33m[Checking kubelet status]\\033[0m"
                 ansible -i ${ANSIBLE_INVENTORY} all -m shell \\
                   -a "sudo systemctl status kubelet" \\
                   --extra-vars "@vars.yaml" || true
-                
-                # Check if control plane is working
                 echo "\\033[33m[Checking control plane status]\\033[0m"
                 ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
                   -a "kubectl get nodes" \\
                   --extra-vars "@vars.yaml" || true
               '''
-              
-              // Re-throw the exception to fail the build
               throw e
             }
           }
@@ -229,18 +201,12 @@ pipeline {
         dir('ansible') {
           sh '''
             echo "\\033[36m[Final Cluster Verification]\\033[0m"
-            
-            # Get cluster status
             ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
               -a "kubectl get nodes -o wide" \\
               --extra-vars "@vars.yaml"
-            
-            # Get pod status
             ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
               -a "kubectl get pods --all-namespaces" \\
               --extra-vars "@vars.yaml"
-            
-            # Check cluster info
             ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
               -a "kubectl cluster-info" \\
               --extra-vars "@vars.yaml"
@@ -255,27 +221,17 @@ pipeline {
         script {
           sh '''
             echo "\\033[36m[Installing and configuring MetalLB]\\033[0m"
-            
-            # Get control plane IP
             CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
             echo "Control plane IP: $CONTROL_PLANE_IP"
-            
-            # Test SSH connection
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "echo 'SSH connection successful'"
-            
-            # Copy the MetalLB installation script
-            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-metallb.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
-            
-            # Make it executable and run it
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "echo 'SSH connection successful'"
+            scp -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} scripts/install-metallb.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} \\
               "chmod +x /tmp/install-metallb.sh && /tmp/install-metallb.sh"
-            
             echo "🎉 MetalLB installation completed successfully!"
           '''
         }
       }
     }
-
 
     stage('Install Nginx Ingress Controller') {
       when { expression { params.INSTALL_INGRESS } }
@@ -283,26 +239,16 @@ pipeline {
         script {
           sh '''
             echo "\\033[36m[Installing Nginx Ingress Controller]\\033[0m"
-            
-            # Get control plane IP
             CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
             echo "Control plane IP: $CONTROL_PLANE_IP"
-            
-            # Copy the ingress installation script
-            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-nginx-ingress.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
-            
-            # Make it executable and run it
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+            scp -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} scripts/install-nginx-ingress.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} \\
               "chmod +x /tmp/install-nginx-ingress.sh && /tmp/install-nginx-ingress.sh"
-            
             echo "🎉 Nginx Ingress Controller installation completed successfully!"
           '''
         }
       }
     }
-
-
-
 
     stage('Final Cluster Summary') {
       steps {
@@ -311,22 +257,15 @@ pipeline {
             echo "=================================="
             echo "🎉 KUBERNETES CLUSTER SUMMARY"
             echo "=================================="
-            
-            # Get control plane IP
             CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
-            
             echo "📊 CLUSTER STATUS:"
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get nodes -o wide"
-            
+            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "kubectl get nodes -o wide"
             echo "🚀 SYSTEM PODS:"
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n kube-system"
-            
+            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n kube-system"
             echo "⚖️ METALLB STATUS:"
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n metallb-system" || echo "MetalLB not installed"
-            
+            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n metallb-system" || echo "MetalLB not installed"
             echo "🌐 SERVICES WITH EXTERNAL IPs:"
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get svc --all-namespaces -o wide | grep -E 'LoadBalancer|EXTERNAL-IP'" || echo "No LoadBalancer services found"
-            
+            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "kubectl get svc --all-namespaces -o wide | grep -E 'LoadBalancer|EXTERNAL-IP'" || echo "No LoadBalancer services found"
             echo "✅ Your Kubernetes cluster is ready!"
           '''
         }
@@ -337,41 +276,28 @@ pipeline {
   post {
     always {
       script {
-        // Collect logs regardless of success/failure
         dir('ansible') {
           sh '''
             echo "\\033[36m[Collecting Final Logs]\\033[0m"
-            
-            # Show final cluster state
             ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
               -a "kubectl get nodes" \\
               --extra-vars "@vars.yaml" || echo "Could not get cluster status"
-            
             echo "Pipeline completed at $(date)"
           '''
         }
       }
       echo 'Pipeline completed.'
     }
-    
+
     success {
       echo '\\033[32m[SUCCESS] Kubernetes cluster deployment completed successfully!\\033[0m'
     }
-    
+
     failure {
       script {
         echo '\\033[31m[FAILURE] Pipeline failed - collecting diagnostic information\\033[0m'
-        
-        // Enhanced cleanup and diagnostics on failure
         sh '''
           echo "\\033[33m[Cleanup on Failure]\\033[0m"
-          
-          # Optional: Uncomment to clean up VMs on failure
-          # if [ -x ./scripts/cleanup_vms.sh ]; then
-          #   ./scripts/cleanup_vms.sh || true
-          # fi
-          
-          # Show what infrastructure exists
           cd terraform && terraform show || true
         '''
       }
