@@ -109,7 +109,8 @@ pipeline {
         dir('terraform') {
           withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
             script {
-              def ips = sh(script: "jq -r '.vm_ips | to_entries[] | .value' outputs.json", returnStdout: true).trim().split('\n')
+              def ipsJson = readJSON file: 'terraform/outputs.json'
+              def ips = ipsJson.vm_ips.values().toList()
               echo "Waiting for SSH access to IPs: ${ips}"
               for (ip in ips) {
                 retry(15) {
