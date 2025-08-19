@@ -33,7 +33,7 @@ jq -r '
     "",
     "# VM IPs (auto-updated by Jenkins):",
     "vm_ips:"
-  ] 
-  + ( .vm_ips.value | to_entries | map("  \(.key): \"\(.value)\"") )
+  ]
+  + (.vm_ips.value | to_entries | map("  \(.key): \"\(.value)\""))
   | .[]
 ' "$OUTPUT_JSON_FILE" > "$ANSIBLE_VARS_FILE"

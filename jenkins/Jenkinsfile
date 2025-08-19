@@ -96,7 +96,7 @@ pipeline {
         dir('terraform') {
           sh 'terraform output -json > outputs.json'
         }
-        dir('') {  // Switch to workspace root
+        dir('') {
           sh './scripts/generate-ansible-vars.sh terraform/outputs.json ansible/vars.yaml'
           sh 'cat ansible/vars.yaml'
         }
@@ -109,7 +109,8 @@ pipeline {
         dir('terraform') {
           withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
             script {
-              def ipsJson = readJSON file: 'terraform/outputs.json'
+              // Since inside 'terraform' dir, file is just 'outputs.json'
+              def ipsJson = readJSON file: 'outputs.json'
               def ips = ipsJson.vm_ips.values().toList()
               echo "Waiting for SSH access to IPs: ${ips}"
               for (ip in ips) {
@@ -140,9 +141,9 @@ pipeline {
         dir('ansible') {
           withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
             sh """
-              ansible -i inventory.ini control_plane_init -m shell -a \"/usr/bin/kubectl get nodes -o wide\" --extra-vars @vars.yaml --private-key=${SSH_KEY}
-              ansible -i inventory.ini control_plane_init -m shell -a \"/usr/bin/kubectl get pods --all-namespaces\" --extra-vars @vars.yaml --private-key=${SSH_KEY}
-              ansible -i inventory.ini control_plane_init -m shell -a \"/usr/bin/kubectl cluster-info\" --extra-vars @vars.yaml --private-key=${SSH_KEY}
+              ansible -i inventory.ini control_plane_init -m shell -a "kubectl get nodes -o wide" --extra-vars @vars.yaml --private-key=${SSH_KEY}
+              ansible -i inventory.ini control_plane_init -m shell -a "kubectl get pods --all-namespaces" --extra-vars @vars.yaml --private-key=${SSH_KEY}
+              ansible -i inventory.ini control_plane_init -m shell -a "kubectl cluster-info" --extra-vars @vars.yaml --private-key=${SSH_KEY}
             """
           }
         }
@@ -190,9 +191,9 @@ pipeline {
             script {
               def cpIp = sh(script: "jq -r '.vm_ips.kcontrolplane1' outputs.json", returnStdout: true).trim()
               sh """
-                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${cpIp} /usr/bin/kubectl get nodes -o wide
-                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${cpIp} /usr/bin/kubectl get pods -n kube-system
-                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${cpIp} /usr/bin/kubectl get pods -n metallb-system || echo "MetalLB not installed"
+                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${cpIp} kubectl get nodes -o wide
+                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${cpIp} kubectl get pods -n kube-system
+                ssh -o StrictHostKeyChecking=no -i ${SSH_KEY} ubuntu@${cpIp} kubectl get pods -n metallb-system || echo "MetalLB not installed"
               """
             }
           }
@@ -208,7 +209,7 @@ pipeline {
         withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
           sh '''
             echo "Collecting cluster status logs"
-            ansible -i inventory.ini control_plane_init -m shell -a "/usr/bin/kubectl get nodes" --extra-vars @vars.yaml --private-key=${SSH_KEY} || echo "Failed to get nodes"
+            ansible -i inventory.ini control_plane_init -m shell -a "kubectl get nodes" --extra-vars @vars.yaml --private-key=${SSH_KEY} || echo "Failed to get nodes"
           '''
         }
       }
