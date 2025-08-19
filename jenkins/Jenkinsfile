@@ -24,6 +24,7 @@ pipeline {
     SSH_KEY_PATH        = '/var/lib/jenkins/.ssh/id_ed25519'
   }
 
+  stages {
     stage('Ensure Libvirt Default Pool') {
       when { expression { !params.SKIP_TERRAFORM } }
       steps {
