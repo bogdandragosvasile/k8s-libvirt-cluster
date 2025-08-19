@@ -108,7 +108,7 @@ pipeline {
           withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
             script {
               def ips = sh(script: "jq -r '.vm_ips | to_entries[] | .value' outputs.json", returnStdout: true).trim().split('\n')
-              echo "VM IPs for SSH wait: ${ips}"
+              echo "Waiting for SSH access to IPs: ${ips}"
               for (ip in ips) {
                 retry(15) {
                   sh "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY} ubuntu@${ip} true"
@@ -124,7 +124,9 @@ pipeline {
       when { expression { !params.SKIP_ANSIBLE } }
       steps {
         dir('ansible') {
-          sh 'ansible-playbook -i inventory.ini main.yaml --extra-vars @vars.yaml -vvv --diff'
+          withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
+            sh "ansible-playbook -i inventory.ini main.yaml --extra-vars @vars.yaml --private-key=${SSH_KEY} -vvv --diff"
+          }
         }
       }
     }
@@ -133,11 +135,13 @@ pipeline {
       when { expression { !params.SKIP_ANSIBLE } }
       steps {
         dir('ansible') {
-          sh '''
-            ansible -i inventory.ini control_plane_init -m shell -a "kubectl get nodes -o wide" --extra-vars @vars.yaml
-            ansible -i inventory.ini control_plane_init -m shell -a "kubectl get pods --all-namespaces" --extra-vars @vars.yaml
-            ansible -i inventory.ini control_plane_init -m shell -a "kubectl cluster-info" --extra-vars @vars.yaml
-          '''
+          withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
+            sh """
+              ansible -i inventory.ini control_plane_init -m shell -a "kubectl get nodes -o wide" --extra-vars @vars.yaml --private-key=${SSH_KEY}
+              ansible -i inventory.ini control_plane_init -m shell -a "kubectl get pods --all-namespaces" --extra-vars @vars.yaml --private-key=${SSH_KEY}
+              ansible -i inventory.ini control_plane_init -m shell -a "kubectl cluster-info" --extra-vars @vars.yaml --private-key=${SSH_KEY}
+            """
+          }
         }
       }
     }
@@ -196,15 +200,15 @@ pipeline {
 
   post {
     always {
+      echo 'Pipeline completed.'
       dir('ansible') {
         withCredentials([sshUserPrivateKey(credentialsId: 'jenkins-root-ssh-key', keyFileVariable: 'SSH_KEY')]) {
           sh '''
             echo "Collecting cluster status logs"
-            ansible -i inventory.ini control_plane_init -m shell -a "kubectl get nodes" --extra-vars @vars.yaml || echo "Failed to get nodes"
+            ansible -i inventory.ini control_plane_init -m shell -a "kubectl get nodes" --extra-vars @vars.yaml --private-key=${SSH_KEY} || echo "Failed to get nodes"
           '''
         }
       }
-      echo 'Pipeline completed.'
     }
     success {
       echo '\033[32m[SUCCESS] Deployment finished successfully!\033[0m'

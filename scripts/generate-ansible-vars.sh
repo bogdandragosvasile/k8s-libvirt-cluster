@@ -35,3 +35,4 @@ jq -r '
 ] + (
   .vm_ips | to_entries | map("  \(.key): \"\(.value)\"")
 ) | .[] > "$ANSIBLE_VARS_FILE"
+' "$OUTPUT_JSON_FILE"
