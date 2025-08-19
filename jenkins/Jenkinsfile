@@ -24,7 +24,6 @@ pipeline {
     SSH_KEY_PATH        = '/var/lib/jenkins/.ssh/id_ed25519'
   }
 
-  stages {
     stage('Ensure Libvirt Default Pool') {
       when { expression { !params.SKIP_TERRAFORM } }
       steps {
@@ -34,7 +33,6 @@ pipeline {
             try {
               sh '''
                 set -e
-                # Check if default pool exists
                 if virsh pool-info default >/dev/null 2>&1; then
                   echo "Default pool already exists."
                 else
@@ -42,12 +40,10 @@ pipeline {
                   virsh pool-define-as default dir --target /var/lib/libvirt/images
                 fi
 
-                # Ensure permissions on pool dir
-                echo "Setting group ownership and permissions on /var/lib/libvirt/images..."
-                sudo chown -R root:libvirt /var/lib/libvirt/images
-                sudo chmod -R g+rwXs /var/lib/libvirt/images
+                echo "Checking permissions and ownership on /var/lib/libvirt/images..."
+                chown -R root:libvirt /var/lib/libvirt/images || true
+                chmod -R g+rwXs /var/lib/libvirt/images || true
 
-                # Start the pool if not running
                 STATE=$(virsh pool-info default | grep State | awk '{print $2}')
                 if [ "$STATE" != "running" ]; then
                   echo "Starting default storage pool..."
@@ -56,7 +52,6 @@ pipeline {
                   echo "Default storage pool is already running."
                 fi
 
-                # Enable autostart if not already enabled
                 AUTOSTART=$(virsh pool-info default | grep Autostart | awk '{print $2}')
                 if [ "$AUTOSTART" != "yes" ]; then
                   echo "Enabling autostart for default storage pool..."
@@ -65,8 +60,6 @@ pipeline {
                   echo "Autostart already enabled for default storage pool."
                 fi
 
-                # Check that permissions on the libvirt socket are accessible to jenkins user
-                echo "Checking permissions on libvirt socket..."
                 LIBVIRT_SOCK=/var/run/libvirt/libvirt-sock
                 if [ ! -e "$LIBVIRT_SOCK" ]; then
                   echo "Libvirt socket $LIBVIRT_SOCK does not exist!"
@@ -74,7 +67,6 @@ pipeline {
                 fi
                 ls -l $LIBVIRT_SOCK
 
-                # Check if jenkins is in libvirt group for socket access
                 if groups jenkins | grep -qw libvirt; then
                   echo "Jenkins user is in libvirt group, OK."
                 else
