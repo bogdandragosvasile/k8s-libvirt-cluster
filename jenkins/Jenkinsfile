@@ -3,7 +3,7 @@ pipeline {
 
   parameters {
     booleanParam(name: 'SKIP_TERRAFORM', defaultValue: true, description: 'Skip Terraform stages')
-    booleanParam(name: 'SKIP_ANSIBLE', defaultValue: true, description: 'Skip Ansible stages') 
+    booleanParam(name: 'SKIP_ANSIBLE', defaultValue: true, description: 'Skip Ansible stages')
     booleanParam(name: 'INSTALL_METALLB', defaultValue: true, description: 'Install MetalLB')
     booleanParam(name: 'INSTALL_INGRESS', defaultValue: true, description: 'Install Nginx Ingress Controller with MetalLB integration')
   }
@@ -16,12 +16,12 @@ pipeline {
   }
 
   environment {
-    LIBVIRT_URI         = 'qemu:///system'
-    ANSIBLE_INVENTORY   = 'inventory.ini'
-    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')
+    LIBVIRT_URI          = 'qemu:///system'
+    ANSIBLE_INVENTORY    = 'inventory.ini'
+    KUBE_SSH_PUBLIC_KEY  = credentials('kube-ssh-public-key')
     ANSIBLE_HOST_KEY_CHECKING = 'False'
-    ANSIBLE_STDOUT_CALLBACK = 'yaml'
-    SSH_KEY_PATH        = '/var/lib/jenkins/.ssh/id_ed25519'
+    ANSIBLE_STDOUT_CALLBACK   = 'yaml'
+    SSH_KEY_PATH         = '/var/lib/jenkins/.ssh/id_ed25519'
   }
 
   stages {
@@ -41,8 +41,6 @@ pipeline {
                   virsh pool-define-as default dir --target /var/lib/libvirt/images
                 fi
 
-                # Removed chown/chmod here to avoid permission errors in Jenkins.
-
                 STATE=$(virsh pool-info default | grep State | awk '{print $2}')
                 if [ "$STATE" != "running" ]; then
                   echo "Starting default storage pool..."
@@ -59,27 +57,28 @@ pipeline {
                   echo "Autostart already enabled for default storage pool."
                 fi
 
+                # Verify libvirt socket exists and Jenkins user group membership
                 LIBVIRT_SOCK=/var/run/libvirt/libvirt-sock
                 if [ ! -e "$LIBVIRT_SOCK" ]; then
-                  echo "Libvirt socket $LIBVIRT_SOCK does not exist!"
+                  echo "Libvirt socket $LIBVIRT_SOCK missing!"
                   exit 1
                 fi
                 ls -l $LIBVIRT_SOCK
 
                 if groups jenkins | grep -qw libvirt; then
-                  echo "Jenkins user is in libvirt group, OK."
+                  echo "Jenkins user in libvirt group: OK."
                 else
-                  echo "WARNING: Jenkins user is NOT in libvirt group! This may cause permission issues."
+                  echo "WARNING: Jenkins user NOT in libvirt group. This may cause permission issues."
                 fi
               '''
               break
-            } catch (err) {
-              echo "Attempt ${i} to ensure libvirt default pool failed: ${err}"
+            } catch (e) {
+              echo "Attempt ${i} to ensure libvirt default pool failed: ${e}"
               if (i < retries) {
-                echo "Retrying in 5 seconds..."
+                echo 'Retrying in 5 seconds...'
                 sleep 5
               } else {
-                error "Failed to ensure libvirt default storage pool after ${retries} attempts."
+                error "Failed to prepare libvirt default pool after ${retries} attempts."
               }
             }
           }
@@ -87,23 +86,23 @@ pipeline {
       }
     }
 
-
-
     stage('Prepare Base Image') {
       when { expression { !params.SKIP_TERRAFORM } }
       steps {
         sh '''
-          echo "\\033[36m[Prepare Base Image]\\033[0m"
+          echo "[Prepare Base Image]"
           BASE_IMAGE_PATH="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
           BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+
           if [ ! -f "$BASE_IMAGE_PATH" ]; then
             echo "Downloading base image..."
             wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE_PATH" --progress=dot:giga
           else
-            echo "Base image already exists - skipping download."
+            echo "Base image already exists, skipping download."
           fi
+
           chmod 666 "$BASE_IMAGE_PATH" || true
-          chown 107:107 "$BASE_IMAGE_PATH" || true
+          # chown ignored due to permissions, ensure manual correct ownership
         '''
       }
     }
@@ -129,11 +128,7 @@ pipeline {
       when { expression { !params.SKIP_TERRAFORM } }
       steps {
         dir('terraform') {
-          sh '''
-            terraform plan \\
-              -var="kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}" \\
-              -out=plan.tfout
-          '''
+          sh "terraform plan -var=kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY} -out=plan.tfout"
         }
       }
     }
@@ -151,45 +146,35 @@ pipeline {
       when { expression { !params.SKIP_TERRAFORM } }
       steps {
         dir('terraform') {
-          sh 'terraform output -json > outputs.json && cat outputs.json'
+          sh 'terraform output -json > outputs.json'
         }
         sh '''
-          echo "\\033[36m[Preserve original vars.yaml and append Terraform outputs]\\033[0m"
-          echo "Original vars.yaml:"
+          echo "Appending Terraform outputs to ansible/vars.yaml"
+          # Append outputs in key: value format safely
+          jq -r 'to_entries| map("\\(.key): \\(.value.value)") | .[]' terraform/outputs.json >> ansible/vars.yaml
+          echo "vars.yaml after append:"
           cat ansible/vars.yaml
-          echo "" >> ansible/vars.yaml
-          echo "# Terraform VM outputs:" >> ansible/vars.yaml
-          jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
-          echo "\\033[36m[Final vars.yaml with Terraform outputs:]\\033[0m"
-          cat ansible/vars.yaml
-          echo "\\033[36m[Check inventory.ini]\\033[0m"
-          ls -l ansible/inventory.ini
-          cat ansible/inventory.ini
         '''
       }
     }
 
-    stage('Wait for VMs to be Reachable via SSH') {
+    stage('Wait for VMs SSH Reachability') {
       when { expression { !params.SKIP_ANSIBLE } }
       steps {
         sh '''
-          echo "\\033[36m[Wait for VMs over SSH]\\033[0m"
+          echo "Wait for SSH access on provisioned VMs"
           MAX_RETRIES=60
-          SLEEP_TIME=10
-          cd terraform
-          for host in $(jq -r '.vm_ips.value | to_entries | map(.value) | .[]' outputs.json); do
-            echo "Checking SSH access on $host..."
+          SLEEP=10
+
+          for ip in $(jq -r '.vm_ips | to_entries[].value' terraform/outputs.json); do
+            echo "Waiting for SSH on $ip"
             for i in $(seq 1 $MAX_RETRIES); do
-              if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-                -i ${SSH_KEY_PATH} -o ConnectTimeout=3 ubuntu@$host 'true' 2>/dev/null; then
-                echo "OK: $host reachable via SSH"
-                break
-              fi
-              echo "Waiting for $host... ($i/$MAX_RETRIES)"
-              sleep $SLEEP_TIME
+              ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEY_PATH} ubuntu@$ip true && break
+              echo "SSH not ready on $ip - retry $i/$MAX_RETRIES"
+              sleep $SLEEP
             done
             if [ $i -eq $MAX_RETRIES ]; then
-              echo "\\033[31mERROR: $host not reachable via SSH\\033[0m"
+              echo "ERROR: SSH not reachable on $ip after $MAX_RETRIES attempts"
               exit 1
             fi
           done
@@ -201,40 +186,9 @@ pipeline {
       when { expression { !params.SKIP_ANSIBLE } }
       steps {
         dir('ansible') {
-          script {
-            try {
-              sh '''
-                echo "\\033[36m[Ansible Setup - Enhanced Error Detection]\\033[0m"
-                set -euo pipefail
-                ANSIBLE_HOST_KEY_CHECKING=False \\
-                ANSIBLE_STDOUT_CALLBACK=yaml \\
-                ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml \\
-                  --extra-vars "@vars.yaml" \\
-                  -vvv \\
-                  --diff
-                echo "\\033[36m[Post-Deployment Verification]\\033[0m"
-                ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-                  -a "kubectl get nodes" \\
-                  --extra-vars "@vars.yaml" || true
-              '''
-            } catch (Exception e) {
-              echo "\\033[31m[ANSIBLE PLAYBOOK FAILED]\\033[0m"
-              echo "Error: ${e.getMessage()}"
-              sh '''
-                echo "\\033[33m[Collecting Diagnostic Information]\\033[0m"
-                ansible -i ${ANSIBLE_INVENTORY} all -m ping --extra-vars "@vars.yaml" || true
-                echo "\\033[33m[Checking kubelet status]\\033[0m"
-                ansible -i ${ANSIBLE_INVENTORY} all -m shell \\
-                  -a "sudo systemctl status kubelet" \\
-                  --extra-vars "@vars.yaml" || true
-                echo "\\033[33m[Checking control plane status]\\033[0m"
-                ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-                  -a "kubectl get nodes" \\
-                  --extra-vars "@vars.yaml" || true
-              '''
-              throw e
-            }
-          }
+          sh '''
+            ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml --extra-vars @vars.yaml -vvv --diff
+          '''
         }
       }
     }
@@ -244,16 +198,9 @@ pipeline {
       steps {
         dir('ansible') {
           sh '''
-            echo "\\033[36m[Final Cluster Verification]\\033[0m"
-            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-              -a "kubectl get nodes -o wide" \\
-              --extra-vars "@vars.yaml"
-            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-              -a "kubectl get pods --all-namespaces" \\
-              --extra-vars "@vars.yaml"
-            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-              -a "kubectl cluster-info" \\
-              --extra-vars "@vars.yaml"
+            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell -a "kubectl get nodes -o wide" --extra-vars @vars.yaml
+            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell -a "kubectl get pods --all-namespaces" --extra-vars @vars.yaml
+            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell -a "kubectl cluster-info" --extra-vars @vars.yaml
           '''
         }
       }
@@ -262,89 +209,56 @@ pipeline {
     stage('Install MetalLB') {
       when { expression { params.INSTALL_METALLB } }
       steps {
-        script {
-          sh '''
-            echo "\\033[36m[Installing and configuring MetalLB]\\033[0m"
-            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
-            echo "Control plane IP: $CONTROL_PLANE_IP"
-            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "echo 'SSH connection successful'"
-            scp -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} scripts/install-metallb.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
-            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} \\
-              "chmod +x /tmp/install-metallb.sh && /tmp/install-metallb.sh"
-            echo "🎉 MetalLB installation completed successfully!"
-          '''
-        }
+        sh '''
+          CONTROL_PLANE_IP=$(ansible -i ansible/inventory.ini control_plane_init --list-hosts | tail -1)
+          scp -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} scripts/install-metallb.sh ubuntu@$CONTROL_PLANE_IP:/tmp/
+          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "chmod +x /tmp/install-metallb.sh && /tmp/install-metallb.sh"
+          echo "MetalLB installation complete."
+        '''
       }
     }
 
     stage('Install Nginx Ingress Controller') {
       when { expression { params.INSTALL_INGRESS } }
       steps {
-        script {
-          sh '''
-            echo "\\033[36m[Installing Nginx Ingress Controller]\\033[0m"
-            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
-            echo "Control plane IP: $CONTROL_PLANE_IP"
-            scp -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} scripts/install-nginx-ingress.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
-            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} \\
-              "chmod +x /tmp/install-nginx-ingress.sh && /tmp/install-nginx-ingress.sh"
-            echo "🎉 Nginx Ingress Controller installation completed successfully!"
-          '''
-        }
+        sh '''
+          CONTROL_PLANE_IP=$(ansible -i ansible/inventory.ini control_plane_init --list-hosts | tail -1)
+          scp -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} scripts/install-nginx-ingress.sh ubuntu@$CONTROL_PLANE_IP:/tmp/
+          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "chmod +x /tmp/install-nginx-ingress.sh && /tmp/install-nginx-ingress.sh"
+          echo "Nginx Ingress installation complete."
+        '''
       }
     }
 
     stage('Final Cluster Summary') {
       steps {
-        script {
-          sh '''
-            echo "=================================="
-            echo "🎉 KUBERNETES CLUSTER SUMMARY"
-            echo "=================================="
-            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
-            echo "📊 CLUSTER STATUS:"
-            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "kubectl get nodes -o wide"
-            echo "🚀 SYSTEM PODS:"
-            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n kube-system"
-            echo "⚖️ METALLB STATUS:"
-            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n metallb-system" || echo "MetalLB not installed"
-            echo "🌐 SERVICES WITH EXTERNAL IPs:"
-            ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@${CONTROL_PLANE_IP} "kubectl get svc --all-namespaces -o wide | grep -E 'LoadBalancer|EXTERNAL-IP'" || echo "No LoadBalancer services found"
-            echo "✅ Your Kubernetes cluster is ready!"
-          '''
-        }
+        sh '''
+          CONTROL_PLANE_IP=$(ansible -i ansible/inventory.ini control_plane_init --list-hosts | tail -1)
+          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "kubectl get nodes -o wide"
+          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "kubectl get pods -n kube-system"
+          ssh -o StrictHostKeyChecking=no -i ${SSH_KEY_PATH} ubuntu@$CONTROL_PLANE_IP "kubectl get pods -n metallb-system" || echo "MetalLB not installed"
+        '''
       }
     }
   }
 
   post {
     always {
-      script {
-        dir('ansible') {
-          sh '''
-            echo "\\033[36m[Collecting Final Logs]\\033[0m"
-            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-              -a "kubectl get nodes" \\
-              --extra-vars "@vars.yaml" || echo "Could not get cluster status"
-            echo "Pipeline completed at $(date)"
-          '''
-        }
+      dir('ansible') {
+        sh '''
+          echo "Collecting final cluster logs"
+          ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell -a "kubectl get nodes" --extra-vars @vars.yaml || echo "Could not get nodes status"
+        '''
       }
       echo 'Pipeline completed.'
     }
 
     success {
-      echo '\\033[32m[SUCCESS] Kubernetes cluster deployment completed successfully!\\033[0m'
+      echo '\033[32m[SUCCESS] Kubernetes cluster deployment finished!\033[0m'
     }
 
     failure {
-      script {
-        echo '\\033[31m[FAILURE] Pipeline failed - collecting diagnostic information\\033[0m'
-        sh '''
-          echo "\\033[33m[Cleanup on Failure]\\033[0m"
-          cd terraform && terraform show || true
-        '''
-      }
+      echo '\033[31m[FAILURE] Pipeline failed, please check logs.\033[0m'
     }
   }
 }
