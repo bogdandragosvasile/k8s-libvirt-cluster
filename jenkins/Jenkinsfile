@@ -18,13 +18,57 @@ pipeline {
   environment {
     LIBVIRT_URI         = 'qemu:///system'
     ANSIBLE_INVENTORY   = 'inventory.ini'
-    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key') // adjust credential if needed
+    KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')
     ANSIBLE_HOST_KEY_CHECKING = 'False'
     ANSIBLE_STDOUT_CALLBACK = 'yaml'
     SSH_KEY_PATH        = '/var/lib/jenkins/.ssh/id_ed25519'
   }
 
   stages {
+    stage('Ensure Libvirt Default Pool') {
+      when { expression { !params.SKIP_TERRAFORM } }
+      steps {
+        script {
+          int retries = 5
+          def success = false
+          for (int i = 1; i <= retries; i++) {
+            try {
+              sh '''
+                set -e
+                if ! virsh pool-info default &>/dev/null; then
+                  echo "Defining default storage pool..."
+                  virsh pool-define-as default dir --target /var/lib/libvirt/images
+                fi
+
+                echo "Starting default storage pool..."
+                virsh pool-start default || true
+
+                echo "Setting default storage pool to autostart..."
+                virsh pool-autostart default || true
+
+                STATE=$(virsh pool-info default | grep State | awk '{print $2}')
+                if [ "$STATE" != "running" ]; then
+                  echo "Default pool state is $STATE, retrying..."
+                  exit 1
+                fi
+                echo "Default libvirt storage pool is ready and running."
+              '''
+              success = true
+              break
+            } catch (err) {
+              echo "Attempt ${i} to ensure libvirt default pool failed: ${err}"
+              if (i < retries) {
+                echo "Retrying in 5 seconds..."
+                sleep 5
+              } else {
+                error "Failed to ensure libvirt default storage pool after ${retries} attempts."
+              }
+            }
+          }
+        }
+      }
+    }
+
     stage('Prepare Base Image') {
       when { expression { !params.SKIP_TERRAFORM } }
       steps {
@@ -40,18 +84,6 @@ pipeline {
           fi
           chmod 666 "$BASE_IMAGE_PATH" || true
           chown 107:107 "$BASE_IMAGE_PATH" || true
-        '''
-      }
-    }
-
-    stage('Setup Libvirt Pool') {
-      when { expression { !params.SKIP_TERRAFORM } }
-      steps {
-        sh '''
-          echo "\\033[36m[Setup Libvirt Pool]\\033[0m"
-          virsh pool-define-as default dir --target /var/lib/libvirt/images || true
-          virsh pool-start default || true
-          virsh pool-autostart default || true
         '''
       }
     }
@@ -103,19 +135,13 @@ pipeline {
         }
         sh '''
           echo "\\033[36m[Preserve original vars.yaml and append Terraform outputs]\\033[0m"
-          
-          # Show original vars.yaml
           echo "Original vars.yaml:"
           cat ansible/vars.yaml
-          
-          # Append Terraform outputs to existing vars.yaml (don't overwrite!)
           echo "" >> ansible/vars.yaml
           echo "# Terraform VM outputs:" >> ansible/vars.yaml
           jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
-          
           echo "\\033[36m[Final vars.yaml with Terraform outputs:]\\033[0m"
           cat ansible/vars.yaml
-          
           echo "\\033[36m[Check inventory.ini]\\033[0m"
           ls -l ansible/inventory.ini
           cat ansible/inventory.ini
@@ -131,7 +157,6 @@ pipeline {
           MAX_RETRIES=60
           SLEEP_TIME=10
           cd terraform
-
           for host in $(jq -r '.vm_ips.value | to_entries | map(.value) | .[]' outputs.json); do
             echo "Checking SSH access on $host..."
             for i in $(seq 1 $MAX_RETRIES); do
@@ -167,7 +192,6 @@ pipeline {
                   --extra-vars "@vars.yaml" \\
                   -vvv \\
                   --diff
-
                 echo "\\033[36m[Post-Deployment Verification]\\033[0m"
                 ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
                   -a "kubectl get nodes" \\
