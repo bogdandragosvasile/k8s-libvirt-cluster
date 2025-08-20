@@ -2,6 +2,50 @@
 
 All notable changes to the k8s-libvirt-cluster project will be documented in this file.
 
+## [1.1.1] - 2025-08-20
+
+### 🚀 Added
+- **Jenkins API Token Creation**: Automated script for creating Jenkins API tokens with proper CSRF handling
+- **Token Management**: Comprehensive token creation, testing, and management capabilities
+- **Environment Integration**: Export tokens to environment files for easy CI/CD integration
+- **Dependency Management**: Automatic dependency checking and installation for Python requests library
+- **Shell Script Wrapper**: User-friendly shell script wrapper for the Python implementation
+
+### 🔧 Enhanced
+- **Security**: Proper CSRF token handling and session management for secure API communication
+- **Error Handling**: Comprehensive error handling with detailed logging and troubleshooting
+- **User Experience**: Intuitive command-line interface with help documentation and examples
+- **Testing**: Built-in token testing functionality to verify API access
+
+### 🛠️ Technical Improvements
+- **Python Implementation**: Robust Python script with type hints and proper exception handling
+- **Session Management**: Secure session handling for Jenkins API communication
+- **Timeout Protection**: Network timeout protection (30 seconds) for reliable operation
+- **Cross-Platform**: Works on Linux, macOS, and Windows with Python 3.6+
+
+### 📁 File Structure
+- **Scripts Directory**: Organized scripts in `scripts/jenkins/` directory
+- **Documentation**: Comprehensive README with usage examples and troubleshooting
+- **Executable Scripts**: Both Python and shell scripts are properly executable
+
+### 🔐 Security Features
+- **CSRF Protection**: Automatic handling of Jenkins CSRF tokens
+- **Secure Communication**: HTTPS support and proper authentication
+- **Token Validation**: Built-in token testing to ensure functionality
+- **Environment Export**: Secure export of tokens to environment files
+
+### 🧪 Testing & Validation
+- **Token Testing**: Automatic verification of created tokens
+- **Error Scenarios**: Comprehensive testing of error conditions
+- **Integration Testing**: Ready for CI/CD pipeline integration
+- **Manual Testing**: Easy manual testing with clear output
+
+### 📋 Usage Examples
+- **Basic Usage**: Simple one-line commands for token creation
+- **Advanced Options**: Custom token names, URLs, and testing
+- **CI/CD Integration**: Ready for GitHub Actions, GitLab CI, and other platforms
+- **Docker Support**: Container-ready implementation
+
 ## [1.1.0] - 2025-08-16
 
 ### 🚀 Added
