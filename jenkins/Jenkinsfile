@@ -16,16 +16,22 @@ pipeline {
   }
 
   parameters {
-    booleanParam(name: 'SKIP_TERRAFORM', defaultValue: true, description: 'Skip Terraform stages')
-    booleanParam(name: 'SKIP_ANSIBLE', defaultValue: true, description: 'Skip Ansible stages') 
-    booleanParam(name: 'INSTALL_METALLB', defaultValue: true, description: 'Install MetalLB')
+    booleanParam(name: 'SKIP_TERRAFORM', defaultValue: true, description: 'Skip Terraform infrastructure provisioning stages')
+    booleanParam(name: 'SKIP_ANSIBLE', defaultValue: true, description: 'Skip Ansible configuration management stages') 
+    booleanParam(name: 'INSTALL_METALLB', defaultValue: true, description: 'Install MetalLB load balancer for external service access')
     booleanParam(name: 'INSTALL_INGRESS', defaultValue: true, description: 'Install Nginx Ingress Controller with MetalLB integration')
+    string(name: 'BRANCH', defaultValue: 'master', description: 'Git branch to deploy from')
+    choice(name: 'DEPLOYMENT_TYPE', choices: ['full', 'infrastructure-only', 'configuration-only', 'addons-only'], description: 'Type of deployment to perform')
   }
 
   options {
     ansiColor('xterm')
     timestamps()
     timeout(time: 90, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    // Enhanced build naming for better visibility
+    buildDiscarder(logRotator(numToKeepStr: '20'))
+    // Add build name setter for better identification
     buildDiscarder(logRotator(numToKeepStr: '20'))
   }
 
@@ -35,278 +41,371 @@ pipeline {
     KUBE_SSH_PUBLIC_KEY = credentials('kube-ssh-public-key')
     ANSIBLE_HOST_KEY_CHECKING = 'False'
     ANSIBLE_STDOUT_CALLBACK = 'yaml'
+    // Enhanced environment variables
+    PIPELINE_VERSION    = '1.1.1'
+    CLUSTER_NAME        = 'k8s-libvirt-cluster'
+    DEPLOYMENT_TIMESTAMP = "${new Date().format('yyyy-MM-dd_HH-mm-ss')}"
   }
 
   stages {
-    stage('Prepare Base Image') {
-      when { expression { !params.SKIP_TERRAFORM } }
+    stage('🚀 Pipeline Initialization') {
       steps {
-        sh '''
-          echo "\\033[36m[Prepare Base Image]\\033[0m"
-          BASE_IMAGE_PATH="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
-          BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
-          if [ ! -f "$BASE_IMAGE_PATH" ]; then
-            echo "Downloading base image..."
-            wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE_PATH" --progress=dot:giga
-          else
-            echo "Base image already exists - skipping download."
-          fi
-          chmod 666 "$BASE_IMAGE_PATH" || true
-          chown 107:107 "$BASE_IMAGE_PATH" || true
-        '''
-      }
-    }
-
-    stage('Setup Libvirt Pool') {
-      when { expression { !params.SKIP_TERRAFORM } }
-      steps {
-        sh '''
-          echo "\\033[36m[Setup Libvirt Pool]\\033[0m"
-          virsh pool-define-as default dir --target /var/lib/libvirt/images || true
-          virsh pool-start default || true
-          virsh pool-autostart default || true
-        '''
-      }
-    }
-
-    stage('Checkout Code') {
-      steps {
-        git url: 'git@github.com:bogdandragosvasile/k8s-libvirt-cluster.git',
-            branch: 'master',
-            credentialsId: 'github-ssh-key'
-      }
-    }
-
-    stage('Terraform Init') {
-      when { expression { !params.SKIP_TERRAFORM } }
-      steps {
-        dir('terraform') {
-          sh 'terraform init'
+        script {
+          // Set build name for better visibility
+          currentBuild.displayName = "#${env.BUILD_NUMBER} - ${params.DEPLOYMENT_TYPE} - ${params.BRANCH}"
+          currentBuild.description = "Deployment Type: ${params.DEPLOYMENT_TYPE}<br/>Branch: ${params.BRANCH}<br/>Timestamp: ${env.DEPLOYMENT_TIMESTAMP}"
+          
+          echo "🎯 Starting Kubernetes Cluster Deployment"
+          echo "📋 Deployment Configuration:"
+          echo "   - Type: ${params.DEPLOYMENT_TYPE}"
+          echo "   - Branch: ${params.BRANCH}"
+          echo "   - Skip Terraform: ${params.SKIP_TERRAFORM}"
+          echo "   - Skip Ansible: ${params.SKIP_ANSIBLE}"
+          echo "   - Install MetalLB: ${params.INSTALL_METALLB}"
+          echo "   - Install Ingress: ${params.INSTALL_INGRESS}"
         }
       }
     }
 
-    stage('Terraform Plan') {
-      when { expression { !params.SKIP_TERRAFORM } }
+    stage('📥 Code Checkout') {
       steps {
-        dir('terraform') {
-          sh '''
-            terraform plan \\
-              -var="kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}" \\
-              -out=plan.tfout
-          '''
+        script {
+          echo "🔍 Checking out code from branch: ${params.BRANCH}"
+          git url: 'git@github.com:bogdandragosvasile/k8s-libvirt-cluster.git',
+              branch: params.BRANCH,
+              credentialsId: 'github-ssh-key'
+          
+          // Display commit information
+          def commit = sh(script: 'git log -1 --pretty=format:"%h - %s (%an)"', returnStdout: true).trim()
+          echo "📝 Latest commit: ${commit}"
         }
       }
     }
 
-    stage('Terraform Apply') {
-      when { expression { !params.SKIP_TERRAFORM } }
-      steps {
-        dir('terraform') {
-          sh 'terraform apply -auto-approve plan.tfout'
-        }
+    stage('🔧 Infrastructure Setup') {
+      when { 
+        expression { 
+          !params.SKIP_TERRAFORM && (params.DEPLOYMENT_TYPE == 'full' || params.DEPLOYMENT_TYPE == 'infrastructure-only') 
+        } 
       }
-    }
-
-    stage('Generate Ansible Inventory') {
-      when { expression { !params.SKIP_TERRAFORM } }
-      steps {
-        dir('terraform') {
-          sh 'terraform output -json > outputs.json && cat outputs.json'
-        }
-        sh '''
-          echo "\\033[36m[Preserve original vars.yaml and append Terraform outputs]\\033[0m"
-          
-          # Show original vars.yaml
-          echo "Original vars.yaml:"
-          cat ansible/vars.yaml
-          
-          # Append Terraform outputs to existing vars.yaml (don't overwrite!)
-          echo "" >> ansible/vars.yaml
-          echo "# Terraform VM outputs:" >> ansible/vars.yaml
-          jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
-          
-          echo "\\033[36m[Final vars.yaml with Terraform outputs:]\\033[0m"
-          cat ansible/vars.yaml
-          
-          echo "\\033[36m[Check inventory.ini]\\033[0m"
-          ls -l ansible/inventory.ini
-          cat ansible/inventory.ini
-        '''
-      }
-    }
-
-    stage('Wait for VMs to be Reachable via SSH') {
-      when { expression { !params.SKIP_ANSIBLE } }
-      steps {
-        sh '''
-          echo "\\033[36m[Wait for VMs over SSH]\\033[0m"
-          MAX_RETRIES=60
-          SLEEP_TIME=10
-          cd terraform
-
-          for host in $(jq -r '.vm_ips.value | to_entries | map(.value) | .[]' outputs.json); do
-            echo "Checking SSH access on $host..."
-            for i in $(seq 1 $MAX_RETRIES); do
-              if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
-                -i /root/.ssh/id_ed25519 -o ConnectTimeout=3 ubuntu@$host 'true' 2>/dev/null; then
-                echo "OK: $host reachable via SSH"
-                break
-              fi
-              echo "Waiting for $host... ($i/$MAX_RETRIES)"
-              sleep $SLEEP_TIME
-            done
-            if [ $i -eq $MAX_RETRIES ]; then
-              echo "\\033[31mERROR: $host not reachable via SSH\\033[0m"
-              exit 1
-            fi
-          done
-        '''
-      }
-    }
-
-    stage('Run Ansible Playbook') {
-      when { expression { !params.SKIP_ANSIBLE } }
-      steps {
-        dir('ansible') {
-          script {
-            try {
-              sh '''
-                echo "\\033[36m[Ansible Setup - Enhanced Error Detection]\\033[0m"
-                
-                # Set strict error handling
-                set -euo pipefail
-                
-                # Run playbook with enhanced verbose output and error detection
-                ANSIBLE_HOST_KEY_CHECKING=False \\
-                ANSIBLE_STDOUT_CALLBACK=yaml \\
-                ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml \\
-                  --extra-vars "@vars.yaml" \\
-                  -vvv \\
-                  --diff
-                
-                # Verify the deployment was successful
-                echo "\\033[36m[Post-Deployment Verification]\\033[0m"
-                ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-                  -a "kubectl get nodes" \\
-                  --extra-vars "@vars.yaml" || true
-              '''
-            } catch (Exception e) {
-              echo "\\033[31m[ANSIBLE PLAYBOOK FAILED]\\033[0m"
-              echo "Error: ${e.getMessage()}"
+      parallel {
+        stage('📦 Prepare Base Image') {
+          steps {
+            script {
+              echo "🖼️  Preparing Ubuntu 24.04 base image..."
+              BASE_IMAGE_PATH="/var/lib/libvirt/images/ubuntu-24.04-server-cloudimg-amd64.img"
+              BASE_IMAGE_URL="https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
               
-              // Collect diagnostic information
+              if (fileExists(BASE_IMAGE_PATH)) {
+                echo "✅ Base image already exists - skipping download"
+              } else {
+                echo "⬇️  Downloading base image..."
+                sh """
+                  wget "$BASE_IMAGE_URL" -O "$BASE_IMAGE_PATH" --progress=dot:giga
+                  chmod 666 "$BASE_IMAGE_PATH" || true
+                  chown 107:107 "$BASE_IMAGE_PATH" || true
+                """
+                echo "✅ Base image downloaded successfully"
+              }
+            }
+          }
+        }
+        
+        stage('🏊 Setup Libvirt Pool') {
+          steps {
+            script {
+              echo "🏊 Configuring libvirt storage pool..."
               sh '''
-                echo "\\033[33m[Collecting Diagnostic Information]\\033[0m"
-                
-                # Check if any nodes are accessible
-                ansible -i ${ANSIBLE_INVENTORY} all -m ping --extra-vars "@vars.yaml" || true
-                
-                # Check kubelet status on all nodes
-                echo "\\033[33m[Checking kubelet status]\\033[0m"
-                ansible -i ${ANSIBLE_INVENTORY} all -m shell \\
-                  -a "sudo systemctl status kubelet" \\
-                  --extra-vars "@vars.yaml" || true
-                
-                # Check if control plane is working
-                echo "\\033[33m[Checking control plane status]\\033[0m"
-                ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-                  -a "kubectl get nodes" \\
-                  --extra-vars "@vars.yaml" || true
+                virsh pool-define-as default dir --target /var/lib/libvirt/images || true
+                virsh pool-start default || true
+                virsh pool-autostart default || true
+                echo "✅ Libvirt pool configured successfully"
               '''
-              
-              // Re-throw the exception to fail the build
-              throw e
             }
           }
         }
       }
     }
 
-    stage('Verify Cluster Status') {
-      when { expression { !params.SKIP_ANSIBLE } }
+    stage('🏗️ Terraform Infrastructure') {
+      when { 
+        expression { 
+          !params.SKIP_TERRAFORM && (params.DEPLOYMENT_TYPE == 'full' || params.DEPLOYMENT_TYPE == 'infrastructure-only') 
+        } 
+      }
+      stages {
+        stage('🔧 Terraform Init') {
+          steps {
+            dir('terraform') {
+              script {
+                echo "🔧 Initializing Terraform..."
+                sh 'terraform init'
+                echo "✅ Terraform initialized successfully"
+              }
+            }
+          }
+        }
+        
+        stage('📋 Terraform Plan') {
+          steps {
+            dir('terraform') {
+              script {
+                echo "📋 Creating Terraform execution plan..."
+                sh """
+                  terraform plan \\
+                    -var="kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}" \\
+                    -out=plan.tfout
+                """
+                echo "✅ Terraform plan created successfully"
+              }
+            }
+          }
+        }
+        
+        stage('🚀 Terraform Apply') {
+          steps {
+            dir('terraform') {
+              script {
+                echo "🚀 Applying Terraform infrastructure..."
+                sh 'terraform apply -auto-approve plan.tfout'
+                echo "✅ Infrastructure deployed successfully"
+              }
+            }
+          }
+        }
+        
+        stage('📝 Generate Inventory') {
+          steps {
+            dir('terraform') {
+              script {
+                echo "📝 Generating Ansible inventory from Terraform outputs..."
+                sh 'terraform output -json > outputs.json && cat outputs.json'
+                
+                sh '''
+                  echo "📋 Preserving original vars.yaml and appending Terraform outputs"
+                  
+                  # Show original vars.yaml
+                  echo "Original vars.yaml:"
+                  cat ansible/vars.yaml
+                  
+                  # Append Terraform outputs to existing vars.yaml
+                  echo "" >> ansible/vars.yaml
+                  echo "# Terraform VM outputs:" >> ansible/vars.yaml
+                  jq -r 'to_entries | map("\\(.key): \\(.value.value)") | join("\\n")' terraform/outputs.json >> ansible/vars.yaml
+                  
+                  echo "Final vars.yaml with Terraform outputs:"
+                  cat ansible/vars.yaml
+                  
+                  echo "Inventory file:"
+                  ls -l ansible/inventory.ini
+                  cat ansible/inventory.ini
+                '''
+                echo "✅ Ansible inventory generated successfully"
+              }
+            }
+          }
+        }
+      }
+    }
+
+    stage('🔌 Configuration Management') {
+      when { 
+        expression { 
+          !params.SKIP_ANSIBLE && (params.DEPLOYMENT_TYPE == 'full' || params.DEPLOYMENT_TYPE == 'configuration-only') 
+        } 
+      }
+      stages {
+        stage('⏳ Wait for SSH Connectivity') {
+          steps {
+            script {
+              echo "⏳ Waiting for VMs to be reachable via SSH..."
+              MAX_RETRIES=60
+              SLEEP_TIME=10
+              
+              sh """
+                cd terraform
+                for host in \$(jq -r '.vm_ips.value | to_entries | map(.value) | .[]' outputs.json); do
+                  echo "🔍 Checking SSH access on \$host..."
+                  for i in \$(seq 1 \$MAX_RETRIES); do
+                    if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+                      -i /root/.ssh/id_ed25519 -o ConnectTimeout=3 ubuntu@\$host 'true' 2>/dev/null; then
+                      echo "✅ \$host reachable via SSH"
+                      break
+                    fi
+                    echo "⏳ Waiting for \$host... (\$i/\$MAX_RETRIES)"
+                    sleep \$SLEEP_TIME
+                  done
+                  if [ \$i -eq \$MAX_RETRIES ]; then
+                    echo "❌ \$host not reachable via SSH"
+                    exit 1
+                  fi
+                done
+              """
+              echo "✅ All VMs are reachable via SSH"
+            }
+          }
+        }
+        
+        stage('⚙️ Run Ansible Playbook') {
+          steps {
+            dir('ansible') {
+              script {
+                echo "⚙️ Running Ansible configuration management..."
+                try {
+                  sh '''
+                    echo "🔧 Ansible Setup - Enhanced Error Detection"
+                    
+                    # Set strict error handling
+                    set -euo pipefail
+                    
+                    # Run playbook with enhanced verbose output and error detection
+                    ANSIBLE_HOST_KEY_CHECKING=False \\
+                    ANSIBLE_STDOUT_CALLBACK=yaml \\
+                    ansible-playbook -i ${ANSIBLE_INVENTORY} main.yaml \\
+                      --extra-vars "@vars.yaml" \\
+                      -vvv \\
+                      --diff
+                    
+                    # Verify the deployment was successful
+                    echo "🔍 Post-Deployment Verification"
+                    ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+                      -a "kubectl get nodes" \\
+                      --extra-vars "@vars.yaml" || true
+                  '''
+                  echo "✅ Ansible playbook completed successfully"
+                } catch (Exception e) {
+                  echo "❌ Ansible playbook failed: ${e.getMessage()}"
+                  
+                  // Collect diagnostic information
+                  sh '''
+                    echo "🔍 Collecting Diagnostic Information"
+                    
+                    # Check if any nodes are accessible
+                    ansible -i ${ANSIBLE_INVENTORY} all -m ping --extra-vars "@vars.yaml" || true
+                    
+                    # Check kubelet status on all nodes
+                    echo "🔍 Checking kubelet status"
+                    ansible -i ${ANSIBLE_INVENTORY} all -m shell \\
+                      -a "sudo systemctl status kubelet" \\
+                      --extra-vars "@vars.yaml" || true
+                    
+                    # Check if control plane is working
+                    echo "🔍 Checking control plane status"
+                    ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+                      -a "kubectl get nodes" \\
+                      --extra-vars "@vars.yaml" || true
+                  '''
+                  
+                  // Re-throw the exception to fail the build
+                  throw e
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    stage('🔍 Cluster Verification') {
+      when { 
+        expression { 
+          !params.SKIP_ANSIBLE && (params.DEPLOYMENT_TYPE == 'full' || params.DEPLOYMENT_TYPE == 'configuration-only') 
+        } 
+      }
       steps {
         dir('ansible') {
-          sh '''
-            echo "\\033[36m[Final Cluster Verification]\\033[0m"
+          script {
+            echo "🔍 Verifying cluster status..."
             
-            # Get cluster status
-            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-              -a "kubectl get nodes -o wide" \\
-              --extra-vars "@vars.yaml"
-            
-            # Get pod status
-            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-              -a "kubectl get pods --all-namespaces" \\
-              --extra-vars "@vars.yaml"
-            
-            # Check cluster info
-            ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
-              -a "kubectl cluster-info" \\
-              --extra-vars "@vars.yaml"
-          '''
+            sh '''
+              echo "📊 Final Cluster Verification"
+              
+              # Get cluster status
+              ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+                -a "kubectl get nodes -o wide" \\
+                --extra-vars "@vars.yaml"
+              
+              # Get pod status
+              ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+                -a "kubectl get pods --all-namespaces" \\
+                --extra-vars "@vars.yaml"
+              
+              # Check cluster info
+              ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
+                -a "kubectl cluster-info" \\
+                --extra-vars "@vars.yaml"
+            '''
+            echo "✅ Cluster verification completed"
+          }
         }
       }
     }
 
-    stage('Install MetalLB') {
-      when { expression { params.INSTALL_METALLB } }
-      steps {
-        script {
-          sh '''
-            echo "\\033[36m[Installing and configuring MetalLB]\\033[0m"
-            
-            # Get control plane IP
-            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
-            echo "Control plane IP: $CONTROL_PLANE_IP"
-            
-            # Test SSH connection
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "echo 'SSH connection successful'"
-            
-            # Copy the MetalLB installation script
-            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-metallb.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
-            
-            # Make it executable and run it
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
-              "chmod +x /tmp/install-metallb.sh && /tmp/install-metallb.sh"
-            
-            echo "🎉 MetalLB installation completed successfully!"
-          '''
+    stage('🔌 Addons Installation') {
+      when { 
+        expression { 
+          params.DEPLOYMENT_TYPE == 'full' || params.DEPLOYMENT_TYPE == 'addons-only' 
+        } 
+      }
+      parallel {
+        stage('⚖️ Install MetalLB') {
+          when { expression { params.INSTALL_METALLB } }
+          steps {
+            script {
+              echo "⚖️ Installing and configuring MetalLB..."
+              
+              sh '''
+                # Get control plane IP
+                CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+                echo "🎯 Control plane IP: $CONTROL_PLANE_IP"
+                
+                # Test SSH connection
+                ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "echo 'SSH connection successful'"
+                
+                # Copy the MetalLB installation script
+                scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-metallb.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+                
+                # Make it executable and run it
+                ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+                  "chmod +x /tmp/install-metallb.sh && /tmp/install-metallb.sh"
+                
+                echo "🎉 MetalLB installation completed successfully!"
+              '''
+            }
+          }
+        }
+        
+        stage('🌐 Install Nginx Ingress') {
+          when { expression { params.INSTALL_INGRESS } }
+          steps {
+            script {
+              echo "🌐 Installing Nginx Ingress Controller..."
+              
+              sh '''
+                # Get control plane IP
+                CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+                echo "🎯 Control plane IP: $CONTROL_PLANE_IP"
+                
+                # Copy the ingress installation script
+                scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-nginx-ingress.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+                
+                # Make it executable and run it
+                ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+                  "chmod +x /tmp/install-nginx-ingress.sh && /tmp/install-nginx-ingress.sh"
+                
+                echo "🎉 Nginx Ingress Controller installation completed successfully!"
+              '''
+            }
+          }
         }
       }
     }
 
-
-    stage('Install Nginx Ingress Controller') {
-      when { expression { params.INSTALL_INGRESS } }
+    stage('📊 Final Summary') {
       steps {
         script {
-          sh '''
-            echo "\\033[36m[Installing Nginx Ingress Controller]\\033[0m"
-            
-            # Get control plane IP
-            CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
-            echo "Control plane IP: $CONTROL_PLANE_IP"
-            
-            # Copy the ingress installation script
-            scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-nginx-ingress.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
-            
-            # Make it executable and run it
-            ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
-              "chmod +x /tmp/install-nginx-ingress.sh && /tmp/install-nginx-ingress.sh"
-            
-            echo "🎉 Nginx Ingress Controller installation completed successfully!"
-          '''
-        }
-      }
-    }
-
-
-
-
-    stage('Final Cluster Summary') {
-      steps {
-        script {
+          echo "📊 Generating final deployment summary..."
+          
           sh '''
             echo "=================================="
             echo "🎉 KUBERNETES CLUSTER SUMMARY"
@@ -329,6 +428,9 @@ pipeline {
             
             echo "✅ Your Kubernetes cluster is ready!"
           '''
+          
+          // Update build description with final status
+          currentBuild.description += "<br/>✅ Deployment completed successfully<br/>Cluster Status: Ready"
         }
       }
     }
@@ -340,7 +442,7 @@ pipeline {
         // Collect logs regardless of success/failure
         dir('ansible') {
           sh '''
-            echo "\\033[36m[Collecting Final Logs]\\033[0m"
+            echo "📋 Collecting Final Logs"
             
             # Show final cluster state
             ansible -i ${ANSIBLE_INVENTORY} control_plane_init -m shell \\
@@ -350,30 +452,58 @@ pipeline {
             echo "Pipeline completed at $(date)"
           '''
         }
+        
+        // Add build result to description
+        def result = currentBuild.result ?: 'SUCCESS'
+        def status = result == 'SUCCESS' ? '✅' : '❌'
+        currentBuild.description += "<br/>${status} Build Result: ${result}"
+        
+        echo "Pipeline completed with result: ${result}"
       }
-      echo 'Pipeline completed.'
     }
     
     success {
-      echo '\\033[32m[SUCCESS] Kubernetes cluster deployment completed successfully!\\033[0m'
+      script {
+        echo '🎉 SUCCESS: Kubernetes cluster deployment completed successfully!'
+        
+        // Send success notification
+        sh '''
+          echo "🎉 Deployment Summary:"
+          echo "   - Deployment Type: ${params.DEPLOYMENT_TYPE}"
+          echo "   - Branch: ${params.BRANCH}"
+          echo "   - Build Number: ${env.BUILD_NUMBER}"
+          echo "   - Duration: ${currentBuild.durationString}"
+          echo "   - Status: SUCCESS"
+        '''
+      }
     }
     
     failure {
       script {
-        echo '\\033[31m[FAILURE] Pipeline failed - collecting diagnostic information\\033[0m'
+        echo '❌ FAILURE: Pipeline failed - collecting diagnostic information'
         
         // Enhanced cleanup and diagnostics on failure
         sh '''
-          echo "\\033[33m[Cleanup on Failure]\\033[0m"
-          
-          # Optional: Uncomment to clean up VMs on failure
-          # if [ -x ./scripts/cleanup_vms.sh ]; then
-          #   ./scripts/cleanup_vms.sh || true
-          # fi
+          echo "🔍 Cleanup on Failure"
           
           # Show what infrastructure exists
           cd terraform && terraform show || true
+          
+          # Show recent logs
+          echo "📋 Recent system logs:"
+          journalctl -n 50 --no-pager || true
         '''
+        
+        // Update build description with failure info
+        currentBuild.description += "<br/>❌ Build failed - check logs for details"
+      }
+    }
+    
+    cleanup {
+      script {
+        echo "🧹 Cleaning up workspace..."
+        // Clean up temporary files
+        sh 'rm -f terraform/plan.tfout terraform/outputs.json || true'
       }
     }
   }
