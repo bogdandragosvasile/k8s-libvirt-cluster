@@ -6,17 +6,19 @@
 ![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Kubernetes](https://img.shields.io/badge/kubernetes-v1.30.1-blue.svg)
+![Autoscaling](https://img.shields.io/badge/autoscaling-enabled-green.svg)
 
-🚀 **Automated deployment of a production-ready, highly available Kubernetes cluster using Terraform, Ansible, and Jenkins**
+🚀 **Automated deployment of a production-ready, highly available Kubernetes cluster with autoscaling using Terraform, Ansible, and Jenkins**
 
 This is based on the work of https://github.com/gmhafiz/k8s-ha. Thank you for your great effort!
 
-This project provides complete infrastructure automation for deploying a 6-node Kubernetes cluster with high availability control plane, load balancing, and CI/CD pipeline integration.
+This project provides complete infrastructure automation for deploying a 6-node Kubernetes cluster with high availability control plane, load balancing, autoscaling capabilities, and CI/CD pipeline integration.
 
 ## 📋 **Table of Contents**
 
 - [Overview](#overview)
 - [Architecture](#architecture)
+- [Autoscaling Features](#autoscaling-features)
 - [Prerequisites](#prerequisites)
 - [Repository Structure](#repository-structure)
 - [Setup Instructions](#setup-instructions)
@@ -32,16 +34,19 @@ This project automates the deployment of:
 
 - **3-node HA Kubernetes control plane** with etcd clustering
 - **3 worker nodes** for application workloads
+- **7 additional autoscaling worker nodes** for dynamic scaling
 - **Load balancer** (HAProxy + Keepalived) for HA API access
 - **Container runtime** (containerd) with proper configuration
 - **Network plugin** (Calico CNI) for pod networking
 - **Complete CI/CD pipeline** using Jenkins
+- **Autoscaling capabilities** with HPA and Cluster Autoscaler
 
 
 ### **Key Features**
 
 ✅ **High Availability**: Multi-master control plane with automatic failover
 ✅ **Load Balancing**: HAProxy with health checks for API server HA
+✅ **Autoscaling**: Horizontal Pod Autoscaler (HPA) and Cluster Autoscaler
 ✅ **Infrastructure as Code**: Terraform for consistent infrastructure provisioning
 ✅ **Configuration Management**: Ansible playbooks for system configuration
 ✅ **CI/CD Integration**: Jenkins pipeline for automated deployments
@@ -84,17 +89,61 @@ This project automates the deployment of:
 │  │     Calico      │ │     Calico      │ │     Calico      ││
 │  └─────────────────┘ └─────────────────┘ └─────────────────┘│
 └─────────────────────────────────────────────────────────────┘
+                           │
+┌─────────────────────────────────────────────────────────────┐
+│                  Autoscaling Layer                          │
+│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐│
+│  │    kworker4     │ │    kworker5     │ │    kworker6     ││
+│  │192.168.122.204  │ │192.168.122.205  │ │192.168.122.206  ││
+│  │  (Auto-scaled)  │ │  (Auto-scaled)  │ │  (Auto-scaled)  ││
+│  └─────────────────┘ └─────────────────┘ └─────────────────┘│
+│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐│
+│  │    kworker7     │ │    kworker8     │ │    kworker9     ││
+│  │192.168.122.207  │ │192.168.122.208  │ │192.168.122.209  ││
+│  │  (Auto-scaled)  │ │  (Auto-scaled)  │ │  (Auto-scaled)  ││
+│  └─────────────────┘ └─────────────────┘ └─────────────────┘│
+│  ┌─────────────────┐                                        │
+│  │   kworker10     │                                        │
+│  │192.168.122.210  │                                        │
+│  │  (Auto-scaled)  │                                        │
+│  └─────────────────┘                                        │
+└─────────────────────────────────────────────────────────────┘
 ```
 
+## 🚀 **Autoscaling Features**
+
+### **Horizontal Pod Autoscaler (HPA)**
+- **Automatic pod scaling** based on CPU and memory utilization
+- **Custom metrics support** for application-specific scaling
+- **Configurable scaling policies** with stabilization windows
+- **Multiple metric types** (Resource, Object, External)
+
+### **Cluster Autoscaler**
+- **Dynamic node provisioning** based on pod scheduling requirements
+- **Automatic node removal** when underutilized
+- **Libvirt integration** for VM lifecycle management
+- **Configurable scaling limits** (min: 3, max: 10 worker nodes)
+
+### **Autoscaling Components**
+- **Metrics Server**: Provides resource utilization metrics
+- **Cluster Autoscaler**: Manages node lifecycle
+- **HPA Controller**: Scales pods based on metrics
+- **Autoscaling Manager**: Manual scaling operations
+
+### **Scaling Capabilities**
+- **Pod-level scaling**: 1-10 replicas per deployment
+- **Node-level scaling**: 3-10 worker nodes
+- **Resource-based scaling**: CPU, memory utilization
+- **Time-based scaling**: Configurable delays and windows
 
 ## 🛠️ **Prerequisites**
 
 ### **Host System Requirements**
 
 - **Operating System**: Ubuntu 20.04+ / CentOS 8+ / RHEL 8+
-- **CPU**: 8+ cores (recommended)
-- **Memory**: 16GB+ RAM
-- **Disk**: 100GB+ free space
+- **CPU**: 12+ cores (recommended for autoscaling)
+- **Memory**: 32GB+ RAM (recommended for autoscaling)
+- **Disk**: 200GB+ free space (for additional worker nodes)
 - **Network**: Internet connectivity for package downloads
 
 
@@ -204,15 +253,18 @@ k8s-libvirt-cluster/
 │   ├── 05.5-lb-full-config.yaml # LB post-cluster config
 │   ├── 06-worker.yaml       # Worker node joining
 │   ├── 07-k8s-config.yaml   # Final Kubernetes config
+│   ├── 08-autoscaling.yaml  # Autoscaling components setup
 │   └── XX-kubeadm_reset.yaml # Cluster reset playbook
 │
 ├── terraform/               # Infrastructure as Code
 │   ├── main.tf             # Main Terraform configuration
 │   ├── variables.tf        # Variable definitions
 │   ├── outputs.tf          # Output definitions
+│   ├── autoscaler.tf       # Autoscaling infrastructure
 │   ├── inventory.tpl       # Ansible inventory template
 │   ├── cloud_init_user_data.tpl    # VM user data template
-│   └── cloud_init_network_config.tpl # VM network template
+│   ├── cloud_init_network_config.tpl # VM network template
+│   └── autoscaling-config.tpl # Autoscaling configuration template
 │
 ├── docker/                 # Custom Docker images
 │   └── Dockerfile          # Jenkins agent with K8s tools
@@ -220,7 +272,10 @@ k8s-libvirt-cluster/
 └── scripts/               # Utility scripts
     ├── cleanup_vms.sh     # VM cleanup script
     ├── cleanNetwork.sh    # Network cleanup
-    └── libvirt-clean.sh   # libvirt cleanup
+    ├── libvirt-clean.sh   # libvirt cleanup
+    ├── install-cluster-autoscaler.sh # Cluster autoscaler installation
+    ├── install-hpa.sh     # HPA installation
+    └── autoscaling-manager.sh # Autoscaling management script
 ```
 
 
@@ -295,6 +350,12 @@ variable "vm_cpu" {
   type        = number
   default     = 2     # Adjust based on your resources
 }
+
+variable "enable_autoscaling" {
+  description = "Enable autoscaling infrastructure"
+  type        = bool
+  default     = true
+}
 ```
 
 
@@ -339,6 +400,7 @@ K8S_API_SERVER_PORT: 6443
     - ✅ Generate Ansible Inventory
     - ✅ Wait for SSH Connectivity
     - ✅ Run Ansible Playbook
+    - ✅ Install Autoscaling Components
     - ✅ Verify Cluster
 
 ### **Access Your Cluster**
@@ -368,6 +430,67 @@ sed -i 's/192.168.122.101/192.168.122.100/g' ~/.kube/config
 kubectl get nodes
 ```
 
+### **Autoscaling Operations**
+
+#### **Install Autoscaling Components**
+
+```bash
+# Install HPA and metrics server
+./scripts/install-hpa.sh
+
+# Install cluster autoscaler
+./scripts/install-cluster-autoscaler.sh
+```
+
+#### **Manual Scaling Operations**
+
+```bash
+# Check autoscaling status
+./scripts/autoscaling-manager.sh status
+
+# Scale up by adding 2 worker nodes
+./scripts/autoscaling-manager.sh scale-up 2
+
+# Scale down by removing 1 worker node
+./scripts/autoscaling-manager.sh scale-down 1
+
+# Start a specific worker node
+./scripts/autoscaling-manager.sh start-node kworker4
+
+# Stop a specific worker node
+./scripts/autoscaling-manager.sh stop-node kworker4
+```
+
+#### **Monitor Autoscaling**
+
+```bash
+# Check HPA status
+kubectl get hpa -A
+
+# Monitor cluster autoscaler logs
+kubectl logs -f deployment/cluster-autoscaler -n cluster-autoscaler
+
+# Check resource utilization
+kubectl top nodes
+kubectl top pods -A
+
+# View scaling events
+kubectl get events --sort-by='.lastTimestamp' | grep -i scale
+```
+
+#### **Test Autoscaling**
+
+```bash
+# Create load to trigger HPA
+kubectl scale deployment autoscaling-test --replicas=5 -n hpa-demo
+
+# Create load to trigger cluster autoscaler
+kubectl scale deployment autoscaling-test --replicas=20 -n hpa-demo
+
+# Monitor scaling
+watch kubectl get pods -n hpa-demo
+watch kubectl get nodes
+```
 
 ### **Cluster Operations**
 
@@ -421,8 +544,8 @@ variable "cp_memory" { default = 4096 }  # 4GB RAM
 variable "cp_cpu" { default = 2 }        # 2 vCPUs
 
 # Worker nodes  
-variable "worker_memory" { default = 4096 }  # 4GB RAM
-variable "worker_cpu" { default = 2 }        # 2 vCPUs
+variable "worker_memory" { default = 8192 }  # 8GB RAM
+variable "worker_cpu" { default = 4 }        # 4 vCPUs
 
 # Load balancer nodes
 variable "lb_memory" { default = 1024 }  # 1GB RAM
@@ -446,6 +569,24 @@ SERVICE_CIDR: "10.96.0.0/12"
 
 # Calico version
 VERSION_CALICO: "v3.28.0"
+```
+
+### **Autoscaling Configuration**
+
+Configure autoscaling settings:
+
+```yaml
+# HPA settings
+HPA_CPU_THRESHOLD: 70
+HPA_MEMORY_THRESHOLD: 80
+HPA_MIN_REPLICAS: 1
+HPA_MAX_REPLICAS: 10
+
+# Cluster autoscaler settings
+CLUSTER_AUTOSCALER_MIN_NODES: 3
+CLUSTER_AUTOSCALER_MAX_NODES: 10
+CLUSTER_AUTOSCALER_SCALE_DOWN_DELAY: 10m
+CLUSTER_AUTOSCALER_SCALE_DOWN_UTILIZATION: 0.5
 ```
 
 
@@ -498,6 +639,24 @@ sudo openssl x509 -in /etc/kubernetes/pki/apiserver.crt -text -noout | grep -A1 
 ```
 
 
+#### **5. Autoscaling Issues**
+
+```bash
+# Check metrics server status
+kubectl get pods -n kube-system | grep metrics-server
+
+# Check cluster autoscaler logs
+kubectl logs -f deployment/cluster-autoscaler -n cluster-autoscaler
+
+# Verify HPA configuration
+kubectl describe hpa -A
+
+# Check resource metrics
+kubectl top nodes
+kubectl top pods -A
+```
+
+
 ### **Debugging Commands**
 
 #### **Check Infrastructure**
@@ -544,6 +703,24 @@ sudo systemctl status keepalived
 ```
 
 
+#### **Check Autoscaling**
+
+```bash
+# HPA status
+kubectl get hpa -A
+
+# Cluster autoscaler status
+kubectl get pods -n cluster-autoscaler
+
+# Scaling events
+kubectl get events --sort-by='.lastTimestamp' | grep -i scale
+
+# Resource utilization
+kubectl top nodes
+kubectl top pods -A
+```
+
+
 ### **Log Locations**
 
 - **Jenkins logs**: Jenkins UI → Build → Console Output
@@ -551,6 +728,7 @@ sudo systemctl status keepalived
 - **Terraform logs**: Set `TF_LOG=DEBUG` environment variable
 - **Kubernetes logs**: `/var/log/pods/` on each node
 - **kubelet logs**: `sudo journalctl -u kubelet`
+- **Autoscaler logs**: `kubectl logs -f deployment/cluster-autoscaler -n cluster-autoscaler`
 
 
 ## 🤝 **Contributing**
@@ -576,6 +754,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ***
 
-**🎉 Happy Kubernetes Clustering!**
+**🎉 Happy Kubernetes Clustering with Autoscaling!**
 
 For questions or issues, please open a GitHub issue or contribute to the project.

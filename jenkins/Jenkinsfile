@@ -20,8 +20,9 @@ pipeline {
     booleanParam(name: 'SKIP_ANSIBLE', defaultValue: true, description: 'Skip Ansible configuration management stages') 
     booleanParam(name: 'INSTALL_METALLB', defaultValue: true, description: 'Install MetalLB load balancer for external service access')
     booleanParam(name: 'INSTALL_INGRESS', defaultValue: true, description: 'Install Nginx Ingress Controller with MetalLB integration')
+    booleanParam(name: 'ENABLE_AUTOSCALING', defaultValue: true, description: 'Enable Kubernetes autoscaling capabilities (HPA + Cluster Autoscaler)')
     string(name: 'BRANCH', defaultValue: 'master', description: 'Git branch to deploy from')
-    choice(name: 'DEPLOYMENT_TYPE', choices: ['full', 'infrastructure-only', 'configuration-only', 'addons-only'], description: 'Type of deployment to perform')
+    choice(name: 'DEPLOYMENT_TYPE', choices: ['full', 'infrastructure-only', 'configuration-only', 'addons-only', 'autoscaling-only'], description: 'Type of deployment to perform')
   }
 
   options {
@@ -63,6 +64,7 @@ pipeline {
           echo "   - Skip Ansible: ${params.SKIP_ANSIBLE}"
           echo "   - Install MetalLB: ${params.INSTALL_METALLB}"
           echo "   - Install Ingress: ${params.INSTALL_INGRESS}"
+          echo "   - Enable Autoscaling: ${params.ENABLE_AUTOSCALING}"
         }
       }
     }
@@ -154,6 +156,7 @@ pipeline {
                 sh """
                   terraform plan \\
                     -var="kube_ssh_public_key=${KUBE_SSH_PUBLIC_KEY}" \\
+                    -var="enable_autoscaling=${params.ENABLE_AUTOSCALING}" \\
                     -out=plan.tfout
                 """
                 echo "✅ Terraform plan created successfully"
@@ -341,6 +344,97 @@ pipeline {
       }
     }
 
+    stage('🚀 Autoscaling Installation') {
+      when { 
+        expression { 
+          params.ENABLE_AUTOSCALING && (params.DEPLOYMENT_TYPE == 'full' || params.DEPLOYMENT_TYPE == 'autoscaling-only') 
+        } 
+      }
+      stages {
+        stage('📊 Install HPA and Metrics Server') {
+          steps {
+            script {
+              echo "📊 Installing Horizontal Pod Autoscaler and Metrics Server..."
+              
+              sh '''
+                # Get control plane IP
+                CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+                echo "🎯 Control plane IP: $CONTROL_PLANE_IP"
+                
+                # Copy the HPA installation script
+                scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-hpa.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+                
+                # Make it executable and run it
+                ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+                  "chmod +x /tmp/install-hpa.sh && /tmp/install-hpa.sh"
+                
+                echo "🎉 HPA and Metrics Server installation completed successfully!"
+              '''
+            }
+          }
+        }
+        
+        stage('⚖️ Install Cluster Autoscaler') {
+          steps {
+            script {
+              echo "⚖️ Installing Cluster Autoscaler..."
+              
+              sh '''
+                # Get control plane IP
+                CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+                echo "🎯 Control plane IP: $CONTROL_PLANE_IP"
+                
+                # Copy the cluster autoscaler installation script
+                scp -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 scripts/install-cluster-autoscaler.sh ubuntu@${CONTROL_PLANE_IP}:/tmp/
+                
+                # Make it executable and run it
+                ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+                  "chmod +x /tmp/install-cluster-autoscaler.sh && /tmp/install-cluster-autoscaler.sh"
+                
+                echo "🎉 Cluster Autoscaler installation completed successfully!"
+              '''
+            }
+          }
+        }
+        
+        stage('🔧 Verify Autoscaling Components') {
+          steps {
+            script {
+              echo "🔧 Verifying autoscaling components..."
+              
+              sh '''
+                # Get control plane IP
+                CONTROL_PLANE_IP=$(grep -A1 "control_plane_init" ansible/inventory.ini | grep -E "^[0-9]" | awk '{print $1}')
+                echo "🎯 Control plane IP: $CONTROL_PLANE_IP"
+                
+                # Verify metrics server
+                echo "📊 Checking Metrics Server..."
+                ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+                  "kubectl get pods -n kube-system | grep metrics-server"
+                
+                # Verify cluster autoscaler
+                echo "⚖️ Checking Cluster Autoscaler..."
+                ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+                  "kubectl get pods -n cluster-autoscaler"
+                
+                # Verify HPA
+                echo "📈 Checking HPA..."
+                ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+                  "kubectl get hpa -A"
+                
+                # Show resource usage
+                echo "📊 Resource Usage:"
+                ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} \\
+                  "kubectl top nodes"
+                
+                echo "✅ Autoscaling components verified successfully!"
+              '''
+            }
+          }
+        }
+      }
+    }
+
     stage('🔌 Addons Installation') {
       when { 
         expression { 
@@ -426,11 +520,22 @@ pipeline {
             echo "🌐 SERVICES WITH EXTERNAL IPs:"
             ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get svc --all-namespaces -o wide | grep -E 'LoadBalancer|EXTERNAL-IP'" || echo "No LoadBalancer services found"
             
+            # Show autoscaling status if enabled
+            if [ "${params.ENABLE_AUTOSCALING}" = "true" ]; then
+              echo "🚀 AUTOSCALING STATUS:"
+              ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get hpa -A" || echo "No HPA found"
+              ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl get pods -n cluster-autoscaler" || echo "Cluster autoscaler not found"
+              ssh -o StrictHostKeyChecking=no -i /root/.ssh/id_ed25519 ubuntu@${CONTROL_PLANE_IP} "kubectl top nodes" || echo "Metrics server not available"
+            fi
+            
             echo "✅ Your Kubernetes cluster is ready!"
           '''
           
           // Update build description with final status
           currentBuild.description += "<br/>✅ Deployment completed successfully<br/>Cluster Status: Ready"
+          if (params.ENABLE_AUTOSCALING) {
+            currentBuild.description += "<br/>🚀 Autoscaling: Enabled"
+          }
         }
       }
     }
@@ -474,6 +579,7 @@ pipeline {
           echo "   - Build Number: ${env.BUILD_NUMBER}"
           echo "   - Duration: ${currentBuild.durationString}"
           echo "   - Status: SUCCESS"
+          echo "   - Autoscaling: ${params.ENABLE_AUTOSCALING}"
         '''
       }
     }
